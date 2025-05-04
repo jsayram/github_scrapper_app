@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { getAllExcludedPatterns, getRequiredExcludedPatterns } from '@/lib/excludedPatterns';
+import { getAllIncludedPatterns } from '@/lib/includedPatterns';
 
 export async function POST(request: Request) {
   try {
@@ -25,6 +27,13 @@ export async function POST(request: Request) {
     // Make request to GitHub API to get repository contents
     const { owner, repo, path, ref } = parseGitHubUrl(repoUrl);
     
+    // Handle include patterns - respect empty array from frontend
+    // Only use default patterns if includePatterns is undefined or null
+    const finalIncludePatterns = Array.isArray(includePatterns) ? includePatterns : getAllIncludedPatterns();
+    
+    // Handle exclude patterns
+    const finalExcludePatterns = excludePatterns?.length ? excludePatterns : getRequiredExcludedPatterns();
+    
     // Fetch files recursively
     try {
       const result = await crawlGitHubFiles({
@@ -34,8 +43,8 @@ export async function POST(request: Request) {
         path,
         token,
         useRelativePaths,
-        includePatterns,
-        excludePatterns,
+        includePatterns: finalIncludePatterns,
+        excludePatterns: finalExcludePatterns,
         maxFileSize: maxFileSize || 500000
       });
       
@@ -147,8 +156,29 @@ async function crawlGitHubFiles({
 }: any) {
   const files: Record<string, string> = {};
   const skippedFiles: [string, number][] = [];
+  const excludedFiles: string[] = []; // Track files excluded by patterns
   let requestCount = 0;
   let method = 'unknown';
+  
+  // Function to check if a file would match include patterns (ignoring exclusions)
+  function wouldBeIncluded(filePath: string, fileName: string, includePatterns?: string[]) {
+    if (!includePatterns || includePatterns.length === 0) return true;
+    
+    function matchesPattern(path: string, pattern: string) {
+      const regexPattern = pattern
+        .replace(/\./g, '\\.')
+        .replace(/\*\*/g, '__GLOBSTAR__')
+        .replace(/\*/g, '[^/]*')
+        .replace(/__GLOBSTAR__/g, '.*');
+      
+      const regex = new RegExp(`^${regexPattern}$`);
+      return regex.test(path);
+    }
+    
+    return includePatterns.some(pattern => 
+      matchesPattern(fileName, pattern) || matchesPattern(filePath, pattern)
+    );
+  }
   
   // First try the tree API approach for efficiency
   try {
@@ -242,6 +272,25 @@ async function crawlGitHubFiles({
     }
     
     method = 'tree_api';
+    
+    // Check for excluded files that would have been included
+    tree.tree.forEach((item: any) => {
+      if (item.type !== 'blob') return;
+      
+      // Calculate relative path if requested
+      let relPath = item.path;
+      if (useRelativePaths && path && item.path.startsWith(path)) {
+        relPath = item.path.substring(path.length).replace(/^\//, '');
+      }
+      
+      const fileName = relPath.split('/').pop() || '';
+      
+      // Check if file would match include patterns but is excluded
+      if (wouldBeIncluded(relPath, fileName, includePatterns) && 
+          !shouldIncludeFile(relPath, fileName, includePatterns, excludePatterns)) {
+        excludedFiles.push(relPath);
+      }
+    });
     
     // Filter for the files we want
     const filesToFetch = tree.tree
@@ -392,8 +441,17 @@ async function crawlGitHubFiles({
           }
           
           if (item.type === 'file') {
+            const fileName = item.name || relPath.split('/').pop() || '';
+            
+            // Check if file would match include patterns but is excluded
+            if (wouldBeIncluded(relPath, fileName, includePatterns) && 
+                !shouldIncludeFile(relPath, fileName, includePatterns, excludePatterns)) {
+              excludedFiles.push(relPath);
+              return;
+            }
+            
             // Check if file should be included based on patterns
-            if (!shouldIncludeFile(relPath, item.name, includePatterns, excludePatterns)) {
+            if (!shouldIncludeFile(relPath, fileName, includePatterns, excludePatterns)) {
               return;
             }
             
@@ -464,12 +522,19 @@ async function crawlGitHubFiles({
   
   console.log(`Fetched ${Object.keys(files).length} files with ${requestCount} API requests using ${method} method.`);
   
+  // Limit the number of excluded files to report to avoid excessively large responses
+  const excludedFilesToReport = excludedFiles.length > 100 ? 
+    [...excludedFiles.slice(0, 100), `... and ${excludedFiles.length - 100} more files`] : 
+    excludedFiles;
+  
   return {
     files,
     stats: {
       downloaded_count: Object.keys(files).length,
       skipped_count: skippedFiles.length,
       skipped_files: skippedFiles,
+      excluded_count: excludedFiles.length,
+      excluded_files: excludedFilesToReport,
       base_path: path || null,
       include_patterns: includePatterns,
       exclude_patterns: excludePatterns,
@@ -499,23 +564,28 @@ function shouldIncludeFile(
     return regex.test(path);
   }
 
-  // If no include patterns specified, include all files
+  // Check exclude patterns first - always prioritize exclusions
+  if (excludePatterns && excludePatterns.length > 0) {
+    const shouldExclude = excludePatterns.some(pattern => 
+      matchesPattern(filePath, pattern) || matchesPattern(fileName, pattern)
+    );
+    
+    // If file should be excluded, return false regardless of include patterns
+    if (shouldExclude) {
+      return false;
+    }
+  }
+
+  // If no include patterns specified, don't include any files
+  // This prevents downloading files when no file types are selected
   if (!includePatterns || includePatterns.length === 0) {
-    return true;
+    return false;
   }
   
   // Check if file matches any include pattern
   const shouldInclude = includePatterns.some(pattern => 
     matchesPattern(fileName, pattern) || matchesPattern(filePath, pattern)
   );
-  
-  // If file should be included but exclude patterns exist, check those
-  if (shouldInclude && excludePatterns && excludePatterns.length > 0) {
-    const shouldExclude = excludePatterns.some(pattern => 
-      matchesPattern(filePath, pattern)
-    );
-    return !shouldExclude;
-  }
   
   return shouldInclude;
 }

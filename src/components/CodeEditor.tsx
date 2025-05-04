@@ -170,7 +170,7 @@ export default function CodeEditor({ code, language, readOnly = true, filePath }
       
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="md:col-span-3">
-          <div className="h-[350px] border rounded-md overflow-hidden code-editor-container">
+          <div className="h-[500px] border rounded-md overflow-hidden code-editor-container">
             <Editor
               height="100%"
               defaultLanguage={editorLanguage}
