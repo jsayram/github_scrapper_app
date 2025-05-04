@@ -171,6 +171,7 @@ export default function SaveToFile({ files, repoUrl, onLoadVersion }: SaveToFile
     <div className="mt-4 relative">
       <div className="flex flex-wrap gap-2">
         <button 
+          type="button"
           onClick={() => setShowVersions(prev => !prev)}
           className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 focus:outline-none"
         >
@@ -180,6 +181,7 @@ export default function SaveToFile({ files, repoUrl, onLoadVersion }: SaveToFile
         {!showVersions && (
           <>
             <button 
+              type="button"
               onClick={toggleSelectMode}
               className={`rounded-md px-4 py-2 text-sm font-medium focus:outline-none ${
                 selectMode 
@@ -201,6 +203,7 @@ export default function SaveToFile({ files, repoUrl, onLoadVersion }: SaveToFile
               />
               
               <button 
+                type="button"
                 onClick={handleSave}
                 disabled={isSaving || Object.keys(files).length === 0 || !versionName.trim()}
                 className="rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 focus:outline-none disabled:bg-gray-400"
@@ -225,12 +228,14 @@ export default function SaveToFile({ files, repoUrl, onLoadVersion }: SaveToFile
             <h3 className="font-medium">Select Files to Save</h3>
             <div>
               <button 
+                type="button"
                 onClick={() => setSelectedFiles(Object.keys(files))} 
                 className="text-xs text-blue-600 mr-2"
               >
                 Select All
               </button>
               <button 
+                type="button"
                 onClick={() => setSelectedFiles([])} 
                 className="text-xs text-red-600"
               >
@@ -278,6 +283,7 @@ export default function SaveToFile({ files, repoUrl, onLoadVersion }: SaveToFile
                   <div className="flex justify-between items-center">
                     <span className="font-medium">{version.name}</span>
                     <button
+                      type="button"
                       onClick={(e) => deleteVersion(version.id, e)}
                       className="text-red-500 hover:text-red-700 text-sm"
                       title="Delete version"

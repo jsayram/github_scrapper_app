@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useState, FormEvent, useEffect } from "react";
+import { useState, FormEvent, useEffect, useRef } from "react";
 import CodeEditor from "../components/CodeEditor";
 import FileBrowser from "../components/FileBrowser";
 import SaveToFile, { VersionInfo } from "../components/SaveToFile";
@@ -22,6 +22,17 @@ interface CrawlerResult {
   stats: FileStats;
 }
 
+interface CodeAnalytics {
+  totalLines: number;
+  totalFiles: number;
+  languageDistribution: Record<string, number>;
+  fileExtensions: Record<string, number>;
+  avgLinesPerFile: number;
+  totalFunctions: number;
+  totalClasses: number;
+  commentRatio: number;
+}
+
 export default function Home() {
   const [repoUrl, setRepoUrl] = useState("");
   const [githubToken, setGithubToken] = useState("");
@@ -36,6 +47,17 @@ export default function Home() {
   const [includePatterns, setIncludePatterns] = useState<string[]>(["*.py", "*.md", "*.js", "*.ts", "*.tsx", "*.cs", "*.java"]);
   const [excludePatterns, setExcludePatterns] = useState<string[]>(["tests/*", "**/node_modules/**", "**/.vscode/**", "**/.venv/**", "**/__pycache__/**"]);
   const [showSummary, setShowSummary] = useState(false);
+  const [codeAnalytics, setCodeAnalytics] = useState<CodeAnalytics>({
+    totalLines: 0,
+    totalFiles: 0,
+    languageDistribution: {},
+    fileExtensions: {},
+    avgLinesPerFile: 0,
+    totalFunctions: 0,
+    totalClasses: 0,
+    commentRatio: 0
+  });
+  const editorRef = useRef<any>(null);
 
   // Load token from env if available
   useEffect(() => {
@@ -50,6 +72,71 @@ export default function Home() {
       setRepoUrl(defaultRepo);
     }
   }, []);
+
+  // Calculate code analytics whenever files change
+  useEffect(() => {
+    if (Object.keys(files).length > 0) {
+      const analytics: CodeAnalytics = {
+        totalLines: 0,
+        totalFiles: Object.keys(files).length,
+        languageDistribution: {},
+        fileExtensions: {},
+        avgLinesPerFile: 0,
+        totalFunctions: 0,
+        totalClasses: 0,
+        commentRatio: 0
+      };
+      
+      let totalComments = 0;
+      
+      Object.entries(files).forEach(([path, content]) => {
+        // Count lines
+        const lines = content.split('\n').length;
+        analytics.totalLines += lines;
+        
+        // Track file extensions
+        const extension = path.split('.').pop()?.toLowerCase() || 'unknown';
+        analytics.fileExtensions[extension] = (analytics.fileExtensions[extension] || 0) + 1;
+        
+        // Language distribution based on extension
+        let language = 'Unknown';
+        if (['js', 'jsx'].includes(extension)) language = 'JavaScript';
+        else if (['ts', 'tsx'].includes(extension)) language = 'TypeScript';
+        else if (['py'].includes(extension)) language = 'Python';
+        else if (['java'].includes(extension)) language = 'Java';
+        else if (['cs'].includes(extension)) language = 'C#';
+        else if (['cpp', 'cc', 'c', 'h', 'hpp'].includes(extension)) language = 'C/C++';
+        else if (['rb'].includes(extension)) language = 'Ruby';
+        else if (['go'].includes(extension)) language = 'Go';
+        else if (['php'].includes(extension)) language = 'PHP';
+        else if (['rs'].includes(extension)) language = 'Rust';
+        else if (['swift'].includes(extension)) language = 'Swift';
+        else if (['md', 'markdown'].includes(extension)) language = 'Markdown';
+        else if (['json'].includes(extension)) language = 'JSON';
+        else if (['html', 'htm'].includes(extension)) language = 'HTML';
+        else if (['css'].includes(extension)) language = 'CSS';
+        else if (['xml'].includes(extension)) language = 'XML';
+        else if (['yml', 'yaml'].includes(extension)) language = 'YAML';
+        
+        analytics.languageDistribution[language] = (analytics.languageDistribution[language] || 0) + 1;
+        
+        // Count functions and classes
+        const functionMatches = content.match(/function\s+\w+\s*\([^)]*\)\s*{|=>\s*{|\w+\s*\([^)]*\)\s*{/g) || [];
+        const classMatches = content.match(/class\s+\w+/g) || [];
+        const commentMatches = content.match(/\/\/.*$|\/\*[\s\S]*?\*\//gm) || [];
+        
+        analytics.totalFunctions += functionMatches.length;
+        analytics.totalClasses += classMatches.length;
+        totalComments += commentMatches.length;
+      });
+      
+      // Calculate averages
+      analytics.avgLinesPerFile = analytics.totalLines / analytics.totalFiles;
+      analytics.commentRatio = totalComments / analytics.totalLines;
+      
+      setCodeAnalytics(analytics);
+    }
+  }, [files]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -94,6 +181,7 @@ export default function Home() {
   const viewFile = (filePath: string) => {
     setSelectedFile(filePath);
     setFileContent(files[filePath]);
+    
   };
 
   const handleLoadVersion = (versionFiles: Record<string, string>, versionInfo: VersionInfo) => {
@@ -140,6 +228,7 @@ export default function Home() {
           <div className="mt-2 py-1 px-3 bg-blue-100 dark:bg-blue-900 rounded-full text-sm">
             Viewing saved version: <span className="font-bold">{activeVersion.name}</span>
             <button 
+              type="button"
               className="ml-2 text-blue-600 dark:text-blue-400 text-xs hover:underline"
               onClick={() => setActiveVersion(null)}
             >
@@ -230,6 +319,18 @@ export default function Home() {
                       { label: "SQL", pattern: "*.sql" },
                       { label: "Kotlin", pattern: "*.kt" },
                       { label: "Dart", pattern: "*.dart" },
+                      { label: "Shell", pattern: "*.sh" },
+                      { label: "Bash", pattern: "*.bash" },
+                      { label: "PowerShell", pattern: "*.ps1" },
+                      { label: "Assembly", pattern: "*.asm" },
+                      { label: "Lua", pattern: "*.lua" },
+                      { label: "R", pattern: "*.r" },
+                      { label: "MATLAB", pattern: "*.m" },
+                      { label: "Julia", pattern: "*.jl" },
+                      { label: "Haskell", pattern: "*.hs" },
+                      { label: "Elixir", pattern: "*.ex,*.exs" },
+                      { label: "Erlang", pattern: "*.erl,*.hrl" },
+                      { label: "Scala", pattern: "*.scala" },
                     ].map((type) => (
                       <div key={type.label} className="flex items-center">
                         <input
@@ -422,102 +523,215 @@ export default function Home() {
         )}
 
         {Object.keys(files).length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 h-[600px]">
-            <div className="h-full">
-              <FileBrowser 
-                files={files} 
-                onFileSelect={viewFile} 
-                selectedFile={selectedFile} 
-              />
+          <div className="space-y-6">
+            {/* Editor and File Browser Section - Top Half of Page */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+              <div className="md:col-span-1 h-[400px] overflow-hidden border rounded-md">
+                <FileBrowser 
+                  files={files} 
+                  onFileSelect={viewFile} 
+                  selectedFile={selectedFile} 
+                />
+              </div>
+              
+              <div className="md:col-span-3">
+                {selectedFile ? (
+                  <CodeEditor
+                    code={fileContent}
+                    filePath={selectedFile}
+                    readOnly={true}
+                  />
+                ) : (
+                  <div className="h-full flex items-center justify-center border rounded-lg text-gray-500">
+                    <div className="text-center">
+                      <p className="mb-2">👈 Select a file from the browser</p>
+                      <p className="text-sm">Files will be displayed in the editor</p>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
             
-            <div className="md:col-span-2 h-full">
-              {selectedFile ? (
-                <CodeEditor
-                  code={fileContent}
-                  filePath={selectedFile}
-                  readOnly={true}
-                />
-              ) : (
-                <div className="h-full flex items-center justify-center border rounded-lg text-gray-500">
-                  <div className="text-center">
-                    <p className="mb-2">👈 Select a file from the browser</p>
-                    <p className="text-sm">Files will be displayed in the editor</p>
+            {/* Code Analytics Section - Bottom Half */}
+            <div className="border rounded-lg p-6 bg-white dark:bg-gray-800 shadow-sm">
+              <h2 className="text-xl font-bold mb-4 flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M3 3a1 1 0 000 2v8a2 2 0 002 2h2.586l-1.293 1.293a1 1 0 101.414 1.414L10 15.414l2.293 2.293a1 1 0 001.414-1.414L12.414 15H15a2 2 0 002-2V5a1 1 0 100-2H3zm11.707 4.707a1 1 0 00-1.414-1.414L10 9.586 8.707 8.293a1 1 0 00-1.414 0l-2 2a1 1 0 101.414 1.414L8 10.414l1.293 1.293a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+                Repository Analytics for Recruiters
+              </h2>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                {/* Key Metrics */}
+                <div className="space-y-4">
+                  <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg">
+                    <h3 className="text-sm font-medium text-blue-700 dark:text-blue-300 mb-2">Key Metrics</h3>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <div className="text-2xl font-bold">{codeAnalytics.totalFiles}</div>
+                        <div className="text-xs text-gray-500 dark:text-gray-400">Total Files</div>
+                      </div>
+                      <div>
+                        <div className="text-2xl font-bold">{codeAnalytics.totalLines.toLocaleString()}</div>
+                        <div className="text-xs text-gray-500 dark:text-gray-400">Lines of Code</div>
+                      </div>
+                      <div>
+                        <div className="text-2xl font-bold">{codeAnalytics.totalFunctions}</div>
+                        <div className="text-xs text-gray-500 dark:text-gray-400">Functions</div>
+                      </div>
+                      <div>
+                        <div className="text-2xl font-bold">{codeAnalytics.totalClasses}</div>
+                        <div className="text-xs text-gray-500 dark:text-gray-400">Classes</div>
+                      </div>
+                    </div>
+                    <div className="mt-3 text-xs text-gray-600 dark:text-gray-300">
+                      Avg {Math.round(codeAnalytics.avgLinesPerFile)} lines per file
+                    </div>
+                  </div>
+                  
+                  <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg">
+                    <h3 className="text-sm font-medium text-green-700 dark:text-green-300 mb-2">Code Quality Indicators</h3>
+                    <div className="space-y-3">
+                      <div>
+                        <div className="flex justify-between text-sm mb-1">
+                          <span>Comment Ratio</span>
+                          <span>{(codeAnalytics.commentRatio * 100).toFixed(1)}%</span>
+                        </div>
+                        <div className="w-full bg-gray-200 dark:bg-gray-700 h-1.5 rounded-full">
+                          <div className="bg-green-500 h-1.5 rounded-full" style={{ 
+                            width: `${Math.min(100, codeAnalytics.commentRatio * 200)}%` 
+                          }}></div>
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          {codeAnalytics.commentRatio > 0.1 ? 'Good documentation' : 'Could use more comments'}
+                        </div>
+                      </div>
+                      
+                      <div>
+                        <div className="flex justify-between text-sm mb-1">
+                          <span>Code Complexity</span>
+                          <span>{Math.round(codeAnalytics.totalFunctions / Math.max(1, codeAnalytics.totalFiles))}/file</span>
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {codeAnalytics.totalFunctions / Math.max(1, codeAnalytics.totalFiles) < 5 
+                            ? 'Good modularization' 
+                            : 'Some files may be too complex'}
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              )}
+                
+                {/* Language Distribution */}
+                <div className="bg-purple-50 dark:bg-purple-900/20 p-4 rounded-lg">
+                  <h3 className="text-sm font-medium text-purple-700 dark:text-purple-300 mb-2">Programming Languages</h3>
+                  <div className="space-y-2">
+                    {Object.entries(codeAnalytics.languageDistribution)
+                      .sort((a, b) => b[1] - a[1])
+                      .slice(0, 6)
+                      .map(([language, count]) => (
+                        <div key={language}>
+                          <div className="flex justify-between text-sm mb-1">
+                            <span>{language}</span>
+                            <span>{count} files</span>
+                          </div>
+                          <div className="w-full bg-gray-200 dark:bg-gray-700 h-1.5 rounded-full">
+                            <div className="bg-purple-500 h-1.5 rounded-full" style={{ 
+                              width: `${Math.min(100, count / codeAnalytics.totalFiles * 100)}%` 
+                            }}></div>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+                
+                {/* File Extensions */}
+                <div className="bg-amber-50 dark:bg-amber-900/20 p-4 rounded-lg">
+                  <h3 className="text-sm font-medium text-amber-700 dark:text-amber-300 mb-2">File Extensions</h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    {Object.entries(codeAnalytics.fileExtensions)
+                      .sort((a, b) => b[1] - a[1])
+                      .slice(0, 8)
+                      .map(([ext, count]) => (
+                        <div key={ext} className="flex items-center justify-between text-sm">
+                          <span className="font-mono">.{ext}</span>
+                          <span className="text-gray-600 dark:text-gray-300">{count}</span>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+                
+                {/* Project Complexity */}
+                <div className="bg-indigo-50 dark:bg-indigo-900/20 p-4 rounded-lg">
+                  <h3 className="text-sm font-medium text-indigo-700 dark:text-indigo-300 mb-2">Project Complexity</h3>
+                  
+                  <div className="space-y-3">
+                    {/* Calculate different complexity metrics */}
+                    <div>
+                      <div className="flex justify-between text-sm">
+                        <span>Overall Size</span>
+                        <span className="font-medium">
+                          {codeAnalytics.totalLines < 1000 ? 'Small' : 
+                           codeAnalytics.totalLines < 10000 ? 'Medium' : 'Large'}
+                        </span>
+                      </div>
+                    </div>
+                    
+                    <div>
+                      <div className="flex justify-between text-sm">
+                        <span>Architecture</span>
+                        <span className="font-medium">
+                          {codeAnalytics.totalFiles < 10 ? 'Simple' : 
+                           codeAnalytics.totalFiles < 50 ? 'Moderate' : 'Complex'}
+                        </span>
+                      </div>
+                    </div>
+                    
+                    <div>
+                      <div className="flex justify-between text-sm">
+                        <span>Technical Debt</span>
+                        <span className="font-medium">
+                          {codeAnalytics.commentRatio > 0.1 && 
+                           codeAnalytics.totalFunctions / Math.max(1, codeAnalytics.totalFiles) < 5 ? 'Low' : 'Moderate'}
+                        </span>
+                      </div>
+                    </div>
+                    
+                    <div className="text-xs text-gray-600 dark:text-gray-300 pt-2">
+                      {Object.keys(codeAnalytics.languageDistribution).length} languages used across the project
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-        )}
-
-        {Object.keys(files).length > 0 && (
-          <div className="mt-8 text-center">
-            <button
-              onClick={() => setShowSummary(true)}
-              className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-6 rounded-lg shadow-md transition-colors flex items-center mx-auto"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                <path d="M2 10a8 8 0 018-8v8h8a8 8 0 11-16 0z" />
-                <path d="M12 2.252A8.014 8.014 0 0117.748 8H12V2.252z" />
-              </svg>
-              Generate Repository Summary
-            </button>
             
-            <FileSummary
-              files={files}
-              isOpen={showSummary}
-              onClose={() => setShowSummary(false)}
-            />
+            {/* Generate Repository Summary Button */}
+            <div className="mt-8 text-center">
+              <button
+                type="button"
+                onClick={() => setShowSummary(true)}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-6 rounded-lg shadow-md transition-colors flex items-center mx-auto"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                  <path d="M2 10a8 8 0 018-8v8h8a8 8 0 11-16 0z" />
+                  <path d="M12 2.252A8.014 8.014 0 0117.748 8H12V2.252z" />
+                </svg>
+                Generate Repository Summary
+              </button>
+              
+              <FileSummary
+                files={files}
+                isOpen={showSummary}
+                onClose={() => setShowSummary(false)}
+              />
+            </div>
           </div>
         )}
       </main>
 
-      <footer className="mt-16 flex gap-6 flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
+      <footer className="mt-16 flex gap-6 flex-wrap items-center justify-center text-sm text-gray-500">
+        <div>© {new Date().getFullYear()} GitHub Scraper</div>
+        <div>Analyze any repository with ease</div>
       </footer>
     </div>
   );
