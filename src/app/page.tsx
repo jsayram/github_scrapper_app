@@ -15,6 +15,8 @@ interface FileStats {
   base_path: string | null;
   include_patterns: string[] | null;
   exclude_patterns: string[] | null;
+  api_requests?: number;
+  method?: string;
 }
 
 interface CrawlerResult {
@@ -45,7 +47,68 @@ export default function Home() {
   const [activeVersion, setActiveVersion] = useState<VersionInfo | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [includePatterns, setIncludePatterns] = useState<string[]>(["*.py", "*.md", "*.js", "*.ts", "*.tsx", "*.cs", "*.java"]);
-  const [excludePatterns, setExcludePatterns] = useState<string[]>(["tests/*", "**/node_modules/**", "**/.vscode/**", "**/.venv/**", "**/__pycache__/**"]);
+  const [excludePatterns, setExcludePatterns] = useState<string[]>([
+    // Test files
+    "test/*", "tests/*", "**/test/**", "**/tests/**", "**/__tests__/**", "**/*test.js", "**/*spec.js", "**/*test.ts", "**/*spec.ts",
+    
+    // Large binary files
+    "**/*.mp4", "**/*.mov", "**/*.avi", "**/*.mkv", "**/*.iso", 
+    "**/*.zip", "**/*.tar", "**/*.gz", "**/*.rar",
+    
+    // Binary datasets
+    "**/*.bin", "**/*.dat", "**/*.pkl", "**/*.h5", "**/*.hdf5",
+    
+    // Generated content and dependencies
+    "**/node_modules/**", "**/node_module/**", "**/package-lock.json", "**/yarn.lock", "**/pnpm-lock.yaml",
+    "**/*.min.js", "**/*.min.css", "**/dist/**", "**/build/**", "**/.next/**", "**/out/**", "**/output/**", "**/target/**", "**/.output/**", "**/_build/**",
+    
+    // Repository management
+    "**/.git/**", "**/.gitignore", "**/.gitattributes", "**/.gitmodules", "**/.github/**",
+    "**/bower_components/**", "**/.pnp/**", "**/jspm_packages/**", 
+    
+    // Python environments and cache
+    "**/.venv/**", "**/venv/**", "**/.env/**", "**/env/**", "**/.virtualenv/**", "**/virtualenv/**",
+    "**/__pycache__/**", "**/*.py[cod]", "**/*.so", "**/*.egg", "**/*.egg-info/**", "**/.pytest_cache/**",
+    
+    // Editor configurations
+    "**/.vscode/**", "**/.idea/**", "**/.eclipse/**", "**/.nbproject/**", "**/.sublime-*",
+    
+    // Coverage reports
+    "**/coverage/**", "**/.coverage", "**/.nyc_output/**", "**/htmlcov/**",
+    
+    // Logs and temp files
+    "**/logs/**", "**/log/**", "**/*.log", "**/*.log.*",
+    "**/tmp/**", "**/temp/**", "**/.tmp/**", "**/.temp/**", "**/*.tmp", "**/*.temp", "**/.cache/**", "**/cache/**",
+    
+    // Configuration files
+    "**/docker-compose.yml", "**/docker-compose.yaml", "**/Dockerfile", "**/.dockerignore",
+    "**/.travis.yml", "**/.gitlab-ci.yml", "**/.circleci/**", "**/.github/workflows/**",
+    
+    // Documentation
+    "**/docs/**", "**/doc/**", "**/*.md", "**/*.mdx", "**/*.markdown",
+    
+    // TypeScript maps
+    "**/*.js.map", "**/*.d.ts.map",
+    
+    // Frontend Build Artifacts and Dependencies
+    "**/node_modules/.cache/**", "**/.sass-cache/**", "**/.parcel-cache/**", "**/webpack-stats.json", 
+    "**/.turbo/**", "**/storybook-static/**",
+    
+    // Backend/Language-specific Files
+    "**/.gradle/**", "**/.m2/**", "**/vendor/**", "**/__snapshots__/**", "**/Pods/**",
+    "**/.serverless/**", "**/venv.bak/**", "**/.rts2_cache_*/**",
+    
+    // Configuration and Environment Files
+    "**/.env.local", "**/.env.development", "**/.env.production", "**/.direnv/**",
+    "**/terraform.tfstate*", "**/cdk.out/**", "**/.terraform/**",
+    
+    // IDE and Editor Files
+    "**/.settings/**", "**/.project", "**/.classpath", "**/*.swp", "**/*~", 
+    "**/*.bak", "**/.DS_Store", "**/Thumbs.db",
+    
+    // Compiled Binary Files
+    "**/*.class", "**/*.o", "**/*.dll", "**/*.exe", "**/*.obj", "**/*.apk", "**/*.ipa"
+  ]);
   const [showSummary, setShowSummary] = useState(false);
   const [codeAnalytics, setCodeAnalytics] = useState<CodeAnalytics>({
     totalLines: 0,
@@ -149,6 +212,13 @@ export default function Home() {
     setActiveVersion(null);
 
     try {
+      // Test mode - simulate errors with special URL prefixes
+      if (repoUrl.startsWith('test:')) {
+        const errorType = repoUrl.split(':')[1];
+        await simulateError(errorType);
+        return;
+      }
+
       const response = await fetch("/api/github-crawler", {
         method: "POST",
         headers: {
@@ -164,8 +234,30 @@ export default function Home() {
         }),
       });
 
+      // Extract rate limit information from response headers if present
+      const rateLimit = response.headers.get('x-ratelimit-limit');
+      const rateLimitRemaining = response.headers.get('x-ratelimit-remaining');
+      const rateLimitReset = response.headers.get('x-ratelimit-reset');
+
       if (!response.ok) {
-        throw new Error(`Error ${response.status}: ${await response.text()}`);
+        const errorText = await response.text();
+        // Special handling for rate limit errors
+        if (response.status === 403 && errorText.includes('rate limit')) {
+          let resetTime = '';
+          if (rateLimitReset) {
+            const resetDate = new Date(parseInt(rateLimitReset) * 1000);
+            resetTime = resetDate.toLocaleTimeString();
+          }
+          
+          throw new Error(
+            `GitHub API rate limit exceeded. ` + 
+            `${rateLimit ? `Limit: ${rateLimit} requests per hour. ` : ''}` +
+            `${rateLimitRemaining ? `Remaining: ${rateLimitRemaining} ` : ''}` +
+            `${resetTime ? `Rate limit will reset at: ${resetTime}` : ''}` +
+            `\n\nTip: Add a GitHub personal access token to increase your rate limit from 60 to 5,000 requests per hour.`
+          );
+        }
+        throw new Error(`Error ${response.status}: ${errorText}`);
       }
 
       const result: CrawlerResult = await response.json();
@@ -175,6 +267,56 @@ export default function Home() {
       setError(err instanceof Error ? err.message : "An unknown error occurred");
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // Helper function to simulate various error conditions
+  const simulateError = async (errorType: string) => {
+    // Simulate network delay
+    await new Promise(resolve => setTimeout(resolve, 800));
+    
+    switch(errorType) {
+      case 'rate-limit':
+        // Simulate a rate limit error
+        const resetTime = new Date();
+        resetTime.setMinutes(resetTime.getMinutes() + 30); // Reset in 30 minutes
+        
+        throw new Error(
+          `GitHub API rate limit exceeded. ` + 
+          `Limit: 60 requests per hour. ` + 
+          `Remaining: 0 ` + 
+          `Rate limit will reset at: ${resetTime.toLocaleTimeString()}` + 
+          `\n\nTip: Add a GitHub personal access token to increase your rate limit from 60 to 5,000 requests per hour.`
+        );
+      
+      case '404':
+        // Simulate repository not found
+        throw new Error('Error 404: Not Found - The repository does not exist or requires authentication');
+        
+      case '401':
+        // Simulate unauthorized access
+        throw new Error('Error 401: Unauthorized - Authentication is required for this repository');
+        
+      case '500':
+        // Simulate server error
+        throw new Error('Error 500: Internal Server Error - GitHub is experiencing issues');
+        
+      case 'timeout':
+        // Simulate timeout
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        throw new Error('Request timed out - The GitHub API is taking too long to respond');
+        
+      case 'network':
+        // Simulate network error
+        throw new Error('Network error - Unable to connect to GitHub API');
+        
+      case 'parse':
+        // Simulate JSON parse error
+        throw new Error('Failed to parse response from GitHub - Invalid JSON received');
+        
+      default:
+        // Default error
+        throw new Error(`Test error: ${errorType || 'unspecified error'}`);
     }
   };
 
@@ -297,16 +439,19 @@ export default function Home() {
                   <label className="block text-sm font-medium mb-1">Include File Types</label>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                     {[
-                      { label: "Python", pattern: "*.py" },
+                                            { label: "Python", pattern: "*.py" },
                       { label: "JavaScript", pattern: "*.js" },
-                      { label: "TypeScript", pattern: "*.ts" },
+                      { label: "TypeScript", pattern: "*.ts,*.d.ts" },
                       { label: "TSX", pattern: "*.tsx" },
                       { label: "JSX", pattern: "*.jsx" },
                       { label: "C#", pattern: "*.cs" },
                       { label: "Java", pattern: "*.java" },
-                      { label: "Markdown", pattern: "*.md" },
-                      { label: "HTML", pattern: "*.html" },
+                      { label: "Markdown", pattern: "*.md,README.*,CONTRIBUTING.*,CHANGELOG.*" },
+                      { label: "MDX", pattern: "*.mdx" },
+                      { label: "HTML", pattern: "*.html,*.htm" },
                       { label: "CSS", pattern: "*.css" },
+                      { label: "SCSS/SASS", pattern: "*.scss,*.sass" },
+                      { label: "Less", pattern: "*.less" },
                       { label: "JSON", pattern: "*.json" },
                       { label: "XML", pattern: "*.xml" },
                       { label: "YAML", pattern: "*.yml,*.yaml" },
@@ -315,22 +460,43 @@ export default function Home() {
                       { label: "Ruby", pattern: "*.rb" },
                       { label: "PHP", pattern: "*.php" },
                       { label: "Swift", pattern: "*.swift" },
-                      { label: "C/C++", pattern: "*.c,*.cpp,*.h,*.hpp" },
+                      { label: "C/C++", pattern: "*.c,*.cpp,*.h,*.hpp,*.cc" },
                       { label: "SQL", pattern: "*.sql" },
-                      { label: "Kotlin", pattern: "*.kt" },
+                      { label: "Kotlin", pattern: "*.kt,*.kts" },
                       { label: "Dart", pattern: "*.dart" },
-                      { label: "Shell", pattern: "*.sh" },
-                      { label: "Bash", pattern: "*.bash" },
+                      { label: "Shell/Bash", pattern: "*.sh,*.bash" },
                       { label: "PowerShell", pattern: "*.ps1" },
                       { label: "Assembly", pattern: "*.asm" },
                       { label: "Lua", pattern: "*.lua" },
-                      { label: "R", pattern: "*.r" },
-                      { label: "MATLAB", pattern: "*.m" },
+                      { label: "R", pattern: "*.r,*.R" },
+                      { label: "MATLAB/Objective-C", pattern: "*.m" },
                       { label: "Julia", pattern: "*.jl" },
-                      { label: "Haskell", pattern: "*.hs" },
+                      { label: "Haskell", pattern: "*.hs,*.lhs" },
                       { label: "Elixir", pattern: "*.ex,*.exs" },
                       { label: "Erlang", pattern: "*.erl,*.hrl" },
-                      { label: "Scala", pattern: "*.scala" },
+                      { label: "Scala", pattern: "*.scala,*.sc" },
+                      { label: "Clojure", pattern: "*.clj,*.cljs,*.cljc" },
+                      { label: "GraphQL", pattern: "*.graphql,*.gql" },
+                      { label: "Docker", pattern: "Dockerfile,*.dockerfile,docker-compose.yml,docker-compose.yaml" },
+                      { label: "Terraform", pattern: "*.tf,*.tfvars" },
+                      { label: "Web Frameworks", pattern: "*.svelte,*.vue,*.astro" },
+                      { label: "ReasonML", pattern: "*.re,*.rei" },
+                      { label: "F#", pattern: "*.fs,*.fsx" },
+                      { label: "Groovy", pattern: "*.groovy" },
+                      { label: "Perl", pattern: "*.pl,*.pm" },
+                      { label: "ASP.NET", pattern: "*.aspx,*.ascx,*.asax" },
+                      { label: "Config Files", pattern: "*.config,*.conf,*.ini,*.env,*.toml,*.properties" },
+                      { label: "Documentation", pattern: "*.txt,*.rst,*.adoc,LICENSE.*,AUTHORS" },
+                      { label: "Project Config", pattern: "*.lock" },
+                      { label: "CI/CD", pattern: ".github/workflows/*.yml,.gitlab-ci.yml,.circleci/*.yml,azure-pipelines.yml,Jenkinsfile" },
+                      { label: "Markup Formats", pattern: "*.adoc,*.asciidoc,*.rst" },
+                      { label: "Protobuf", pattern: "*.proto" },
+                      { label: "WebAssembly", pattern: "*.wasm,*.wat" },
+                      { label: "Objective-C", pattern: "*.mm" },
+                      { label: "Blockchain", pattern: "*.sol" },
+                      { label: "Jupyter Notebook", pattern: "*.ipynb" },
+                      { label: "ML/AI", pattern: "**/models/*.py,**/nn/*.py,**/torch/*.py,**/tensorflow/*.py,**/keras/*.py" },
+                      { label: "CUDA", pattern: "*.cu,*.cuh" },
                     ].map((type) => (
                       <div key={type.label} className="flex items-center">
                         <input
@@ -359,16 +525,30 @@ export default function Home() {
                   <label className="block text-sm font-medium mb-1">Exclude Patterns</label>
                   <div className="grid grid-cols-1 gap-2">
                     {[
-                      { label: "Test Files", pattern: "tests/*" },
-                      { label: "Node Modules", pattern: "**/node_modules/**" },
-                      { label: "VS Code Config", pattern: "**/.vscode/**" },
-                      { label: "Virtual Env", pattern: "**/.venv/**" },
-                      { label: "Python Cache", pattern: "**/__pycache__/**" },
-                      { label: "Build Output", pattern: "**/dist/**,**/build/**" },
-                      { label: "Git Files", pattern: "**/.git/**" },
-                      { label: "Coverage Reports", pattern: "**/coverage/**" },
-                      { label: "Logs", pattern: "**/logs/**,**/*.log" },
-                      { label: "Temp Files", pattern: "**/tmp/**,**/.tmp/**,**/*.tmp" },
+                      { label: "Test Files", pattern: "test/*,tests/*,**/test/**,**/tests/**,**/__tests__/**,**/*test.js,**/*spec.js,**/*test.ts,**/*spec.ts", required: true, reason: "Test files often duplicate source code logic and can double API usage without adding value to code understanding" },
+                      { label: "Node Modules", pattern: "**/node_modules/**,**/node_module/**", required: true, reason: "Contains 100,000+ files that would exceed API rate limits" },
+                      { label: "Package Files", pattern: "**/package-lock.json,**/yarn.lock,**/pnpm-lock.yaml", required: true, reason: "Auto-generated files that can be 10,000+ lines long" },
+                      { label: "Editor Config", pattern: "**/.vscode/**,**/.idea/**,**/.eclipse/**,**/.nbproject/**,**/.sublime-*", required: true, reason: "IDE configuration files that don't contain actual project code" },
+                      { label: "Virtual Env", pattern: "**/.venv/**,**/venv/**,**/.env/**,**/env/**,**/.virtualenv/**,**/virtualenv/**", required: true, reason: "Contains binary files and dependencies that aren't part of the source code" },
+                      { label: "Python Cache", pattern: "**/__pycache__/**,**/*.py[cod],**/*.so,**/*.egg,**/*.egg-info/**,**/.pytest_cache/**", required: true, reason: "Contains binary compilation artifacts, not source code" },
+                      { label: "Build Output", pattern: "**/dist/**,**/build/**,**/_build/**,**/out/**,**/output/**,**/target/**,**/.output/**", required: true, reason: "Contains generated files that aren't part of the source code" },
+                      { label: "Git Files", pattern: "**/.git/**, **/.gitignore, **/.gitattributes, **/.gitmodules, **/.github/**", required: true, reason: "Contains repository history which would dramatically increase download size" },
+                      { label: "Coverage Reports", pattern: "**/coverage/**,**/.coverage,**/.nyc_output/**,**/htmlcov/**", required: true, reason: "Generated test coverage reports that don't contain original code" },
+                      { label: "Logs", pattern: "**/logs/**,**/log/**,**/*.log,**/*.log.*", required: true, reason: "Runtime logs that contain execution data but not meaningful code" },
+                      { label: "Temp Files", pattern: "**/tmp/**,**/temp/**,**/.tmp/**,**/.temp/**,**/*.tmp,**/*.temp,**/.cache/**,**/cache/**", required: true, reason: "Temporary files that aren't part of the source code" },
+                      { label: "Docker Files", pattern: "**/docker-compose.yml,**/docker-compose.yaml,**/Dockerfile,**/.dockerignore", required: true, reason: "Environment configuration that doesn't represent the core application code" },
+                      { label: "CI Files", pattern: "**/.travis.yml,**/.gitlab-ci.yml,**/.circleci/**,**/.github/workflows/**", required: true, reason: "CI/CD configuration that doesn't contain application logic" },
+                      { label: "Dependency Dirs", pattern: "**/bower_components/**,**/.pnp/**,**/jspm_packages/**", required: true, reason: "Contains thousands of third-party dependencies, not project source code" },
+                      { label: "Documentation", pattern: "**/docs/**,**/doc/**,**/*.md,**/*.mdx,**/*.markdown", required: false, reason: "Written documentation that explains but doesn't implement functionality" },
+                      { label: "Minified Files", pattern: "**/*.min.js,**/*.min.css", required: true, reason: "Single-line files that are hard to analyze and have unminified counterparts" },
+                      { label: "TypeScript Maps", pattern: "**/*.js.map,**/*.d.ts.map", required: true, reason: "Debug files not needed for code analysis" },
+                      { label: "Large Media Files", pattern: "**/*.mp4,**/*.mov,**/*.avi,**/*.mkv,**/*.iso,**/*.zip,**/*.tar,**/*.gz,**/*.rar", required: true, reason: "Binary files that don't contain readable code and would use up API quota" },
+                      { label: "Binary Datasets", pattern: "**/*.bin,**/*.dat,**/*.pkl,**/*.h5,**/*.hdf5", required: true, reason: "Large data files that don't contain readable code" },  
+                      { label: "Frontend Build Caches", pattern: "**/node_modules/.cache/**,**/.sass-cache/**,**/.parcel-cache/**,**/webpack-stats.json,**/.turbo/**,**/storybook-static/**", required: true, reason: "Build tool cache files and generated artifacts that don't contain source code" },
+                      { label: "Backend Build Files", pattern: "**/.gradle/**,**/.m2/**,**/vendor/**,**/__snapshots__/**,**/Pods/**,**/.serverless/**,**/venv.bak/**,**/.rts2_cache_*/**", required: true, reason: "Build artifacts and framework-specific files that aren't actual source code" },
+                      { label: "Env & Config Files", pattern: "**/.env.local,**/.env.development,**/.env.production,**/.direnv/**,**/terraform.tfstate*,**/cdk.out/**,**/.terraform/**", required: true, reason: "Environment configuration files that often contain sensitive data and aren't source code" },
+                      { label: "Editor & OS Files", pattern: "**/.settings/**,**/.project,**/.classpath,**/*.swp,**/*~,**/*.bak,**/.DS_Store,**/Thumbs.db", required: true, reason: "Editor and operating system metadata files that don't contain project code" },
+                      { label: "Compiled Binaries", pattern: "**/*.class,**/*.o,**/*.dll,**/*.exe,**/*.obj,**/*.apk,**/*.ipa", required: true, reason: "Compiled binary files that are generated from source code" },
                     ].map((type) => (
                       <div key={type.label} className="flex items-center">
                         <input
@@ -376,6 +556,11 @@ export default function Home() {
                           id={`exclude-${type.label}`}
                           checked={type.pattern.split(',').some(p => excludePatterns.includes(p))}
                           onChange={(e) => {
+                            // If this is a required exclusion, don't allow it to be unchecked
+                            if (type.required && !e.target.checked) {
+                              return;
+                            }
+                            
                             const patterns = type.pattern.split(',');
                             if (e.target.checked) {
                               setExcludePatterns([...excludePatterns, ...patterns.filter(p => !excludePatterns.includes(p))]);
@@ -384,9 +569,25 @@ export default function Home() {
                             }
                           }}
                           className="mr-2"
+                          disabled={type.required}
                         />
-                        <label htmlFor={`exclude-${type.label}`} className="text-sm">
+                        <label htmlFor={`exclude-${type.label}`} className={`text-sm flex items-center ${type.required ? 'cursor-not-allowed' : ''}`}>
                           {type.label}
+                          {type.required && (
+                            <span className="ml-2 inline-flex items-center rounded-full bg-amber-100 dark:bg-amber-900 px-2 py-0.5 text-xs text-amber-800 dark:text-amber-200">
+                              Required
+                            </span>
+                          )}
+                          {type.required && (
+                            <span className="ml-2 group relative">
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-gray-500 cursor-help" viewBox="0 0 20 20" fill="currentColor">
+                                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 00-.867.5 1 1 0 11-1.731-1A3 3 0 0113 8a3.001 3.001 0 01-2 2.83V11a1 1 0 11-2 0v-1a1 1 0 011-1 1 1 0 100-2zm0 8a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+                              </svg>
+                              <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 -translate-y-1 invisible group-hover:visible w-64 bg-black dark:bg-white text-white dark:text-black text-xs rounded p-2 z-10">
+                                {type.reason}
+                              </div>
+                            </span>
+                          )}
                         </label>
                       </div>
                     ))}
@@ -438,18 +639,79 @@ export default function Home() {
                         }}
                       />
                       <div className="mt-2 flex flex-wrap gap-2">
-                        {excludePatterns.map((pattern, i) => (
-                          <span key={i} className="bg-red-100 dark:bg-red-900 px-2 py-1 rounded-full text-xs flex items-center">
-                            {pattern}
-                            <button
-                              type="button"
-                              onClick={() => setExcludePatterns(excludePatterns.filter((_, idx) => idx !== i))}
-                              className="ml-1 text-red-500 font-bold"
-                            >
-                              ×
-                            </button>
-                          </span>
-                        ))}
+                        {excludePatterns.map((pattern, i) => {
+                          // Check if this pattern is part of any required exclude group
+                          const isRequiredPattern = [
+                            // Test files
+                            "test/*", "tests/*", "**/test/**", "**/tests/**", "**/__tests__/**", "**/*test.js", "**/*spec.js", "**/*test.ts", "**/*spec.ts",
+                            // Node Modules
+                            "**/node_modules/**", "**/node_module/**", "**/node_modules/.cache/**",
+                            // Package Files
+                            "**/package-lock.json", "**/yarn.lock", "**/pnpm-lock.yaml",
+                            // Editor Config
+                            "**/.vscode/**", "**/.idea/**", "**/.eclipse/**", "**/.nbproject/**", "**/.sublime-*",
+                            // Virtual Env
+                            "**/.venv/**", "**/venv/**", "**/.env/**", "**/env/**", "**/.virtualenv/**", "**/virtualenv/**", "**/venv.bak/**",
+                            // Python Cache
+                            "**/__pycache__/**", "**/*.py[cod]", "**/*.so", "**/*.egg", "**/*.egg-info/**", "**/.pytest_cache/**",
+                            // Build Output
+                            "**/dist/**", "**/build/**", "**/_build/**", "**/out/**", "**/output/**", "**/target/**", "**/.output/**","**/.next/**",
+                            // Git Files
+                            "**/.git/**", "**/.gitignore", "**/.gitattributes", "**/.gitmodules", "**/.github/**",
+                            // Coverage Reports
+                            "**/coverage/**", "**/.coverage", "**/.nyc_output/**", "**/htmlcov/**",
+                            // Logs
+                            "**/logs/**", "**/log/**", "**/*.log", "**/*.log.*",
+                            // Temp Files
+                            "**/tmp/**", "**/temp/**", "**/.tmp/**", "**/.temp/**", "**/*.tmp", "**/*.temp", "**/.cache/**", "**/cache/**",
+                            // Docker Files
+                            "**/docker-compose.yml", "**/docker-compose.yaml", "**/Dockerfile", "**/.dockerignore",
+                            // CI Files
+                            "**/.travis.yml", "**/.gitlab-ci.yml", "**/.circleci/**", "**/.github/workflows/**",
+                            // Dependency Dirs
+                            "**/bower_components/**", "**/.pnp/**", "**/jspm_packages/**",
+                            // Documentation
+                            "**/docs/**", "**/doc/**", "**/*.md", "**/*.mdx", "**/*.markdown",
+                            // Minified Files
+                            "**/*.min.js", "**/*.min.css",
+                            // TypeScript Maps
+                            "**/*.js.map", "**/*.d.ts.map",
+                            // Large Media Files
+                            "**/*.mp4", "**/*.mov", "**/*.avi", "**/*.mkv", "**/*.iso", "**/*.zip", "**/*.tar", "**/*.gz", "**/*.rar",
+                            // Binary Datasets
+                            "**/*.bin", "**/*.dat", "**/*.pkl", "**/*.h5", "**/*.hdf5",
+                            // Frontend Build Artifacts
+                            "**/.sass-cache/**", "**/.parcel-cache/**", "**/webpack-stats.json", "**/.turbo/**", "**/storybook-static/**",
+                            // Backend/Language Files
+                            "**/.gradle/**", "**/.m2/**", "**/vendor/**", "**/__snapshots__/**", "**/Pods/**", "**/.serverless/**", "**/.rts2_cache_*/**",
+                            // Environment and Config
+                            "**/.env.local", "**/.env.development", "**/.env.production", "**/.direnv/**", "**/terraform.tfstate*", "**/cdk.out/**", "**/.terraform/**",
+                            // IDE/Editor and OS Files
+                            "**/.settings/**", "**/.project", "**/.classpath", "**/*.swp", "**/*~", "**/*.bak", "**/.DS_Store", "**/Thumbs.db",
+                            // Compiled Binaries
+                            "**/*.class", "**/*.o", "**/*.dll", "**/*.exe", "**/*.obj", "**/*.apk", "**/*.ipa"
+                          ].includes(pattern);
+                          
+                          return (
+                            <span key={i} className={`${isRequiredPattern ? 'bg-gray-200 dark:bg-gray-700' : 'bg-red-100 dark:bg-red-900'} px-2 py-1 rounded-full text-xs flex items-center`}>
+                              {pattern}
+                              {!isRequiredPattern && (
+                                <button
+                                  type="button"
+                                  onClick={() => setExcludePatterns(excludePatterns.filter((_, idx) => idx !== i))}
+                                  className="ml-1 text-red-500 font-bold"
+                                >
+                                  ×
+                                </button>
+                              )}
+                              {isRequiredPattern && (
+                                <span className="ml-1 text-gray-500" title="This pattern is required and can't be removed">
+                                  🔒
+                                </span>
+                              )}
+                            </span>
+                          );
+                        })}
                       </div>
                     </div>
                   </div>
@@ -512,6 +774,24 @@ export default function Home() {
                   <p className="text-sm text-gray-600 dark:text-gray-300">Files Skipped</p>
                 </div>
               )}
+              
+              {/* Display API method and request count if available */}
+              {!activeVersion && stats.method && (
+                <div>
+                  <span className="text-lg font-bold">
+                    {stats.method === 'tree_api' ? 'Git Tree API' : 'Contents API'}
+                  </span>
+                  <p className="text-sm text-gray-600 dark:text-gray-300">API Method</p>
+                </div>
+              )}
+              
+              {!activeVersion && stats.api_requests !== undefined && (
+                <div>
+                  <span className="text-lg font-bold">{stats.api_requests}</span>
+                  <p className="text-sm text-gray-600 dark:text-gray-300">API Requests</p>
+                </div>
+              )}
+              
               {stats.base_path && (
                 <div className="col-span-2">
                   <span className="text-sm font-mono">{stats.base_path}</span>
