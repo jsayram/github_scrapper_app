@@ -21,12 +21,13 @@ import {
  */
 export function createTutorialFlow(): Flow {
   // 1️⃣  Instantiate nodes
-  const fetchRepo = new FetchRepo();
-  const identifyAbstractions = new IdentifyAbstractions();
-  const analyzeRelationships = new AnalyzeRelationships();
-  const orderChapters = new OrderChapters();
-  const writeChapters = new WriteChapters(); // BatchNode
-  const combineTutorial = new CombineTutorial();
+  const fetchRepo = new FetchRepo(5,20);
+  const identifyAbstractions = new IdentifyAbstractions(5,20);
+  const analyzeRelationships = new AnalyzeRelationships(5,20);
+  const orderChapters = new OrderChapters(5,20);
+  const writeChapters = new WriteChapters(5,20); // BatchNode
+  const combineTutorial = new CombineTutorial(3,20);
+
 
   // 2️⃣  Wire up the DAG using the fluent `.next()` helper provided by Pocket Flow
   fetchRepo

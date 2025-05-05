@@ -11,24 +11,12 @@ import {
   excludedPatternCategories,
   getAllExcludedPatterns,
 } from "@/lib/excludedPatterns";
-
-interface FileStats {
-  downloaded_count: number;
-  skipped_count: number;
-  skipped_files: [string, number][];
-  excluded_count?: number; // Count of files that matched include patterns but were excluded
-  excluded_files?: string[]; // List of files that were excluded despite matching include patterns
-  base_path: string | null;
-  include_patterns: string[] | null;
-  exclude_patterns: string[] | null;
-  api_requests?: number;
-  method?: string;
-}
-
-interface CrawlerResult {
-  files: Record<string, string>;
-  stats: FileStats;
-}
+import {
+  githubFileCrawler,
+  simulateError,
+  FileStats,
+  CrawlerResult,
+} from "@/lib/githubFileCrawler";
 
 interface CodeAnalytics {
   totalLines: number;
@@ -176,11 +164,37 @@ export default function Home() {
 
     try {
       // Test mode - simulate errors with special URL prefixes
-      if (repoUrl.startsWith("test:")) {
-        const errorType = repoUrl.split(":")[1];
-        await simulateError(errorType);
-        return;
-      }
+            if (repoUrl.startsWith("test:")) {
+            const errorType = repoUrl.split(":")[1];
+            
+            try {
+              // If errorType is defined and not "mock", simulate that error
+              if (errorType && errorType !== "mock") {
+                await simulateError(errorType);
+              }
+              
+              // In mock mode, the URL doesn't matter - it's completely ignored
+              // Just pass the current URL or any placeholder since it won't be used
+              const result = await githubFileCrawler({
+                repoUrl: "mock-mode", // This value will be ignored when useMock=true
+                token: githubToken,
+                useRelativePaths: true,
+                includePatterns,
+                excludePatterns,
+                maxFileSize: 500000,
+                useMock: true, // This is what matters - it will trigger mock data generation
+              });
+              
+              // Update state with the mock data
+              setFiles(result.files);
+              setStats(result.stats);
+            } catch (err) {
+              setError(err instanceof Error ? err.message : "An unknown error occurred");
+            } finally {
+              setIsLoading(false);
+            }
+            return;
+          }
 
       // Only send include patterns if there are some selected
       // If no patterns are selected, send an empty array to explicitly indicate no patterns
@@ -188,51 +202,31 @@ export default function Home() {
       const patternsToInclude =
         includePatterns.length > 0 ? includePatterns : [];
 
-      const response = await fetch("/api/github-crawler", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          repoUrl,
-          token: githubToken,
-          useRelativePaths: true,
-          includePatterns: patternsToInclude,
-          excludePatterns,
-          maxFileSize: 500000,
-        }),
+      //get enviroment variable for mock github flag being true or false
+      const mockGithub = process.env.USE_MOCK_GITHUB;
+
+    let result: CrawlerResult;
+    if (mockGithub) {
+      result = await githubFileCrawler({
+        repoUrl,
+        token: githubToken,
+        useRelativePaths: true,
+        includePatterns: patternsToInclude,
+        excludePatterns,
+        maxFileSize: 500000,
+        useMock: true,
       });
-
-      // Extract rate limit information from response headers if present
-      const rateLimit = response.headers.get("x-ratelimit-limit");
-      const rateLimitRemaining = response.headers.get("x-ratelimit-remaining");
-      const rateLimitReset = response.headers.get("x-ratelimit-reset");
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        // Special handling for rate limit errors
-        if (response.status === 403 && errorText.includes("rate limit")) {
-          let resetTime = "";
-          if (rateLimitReset) {
-            const resetDate = new Date(parseInt(rateLimitReset) * 1000);
-            resetTime = resetDate.toLocaleTimeString();
-          }
-
-          throw new Error(
-            `GitHub API rate limit exceeded. ` +
-              `${rateLimit ? `Limit: ${rateLimit} requests per hour. ` : ""}` +
-              `${
-                rateLimitRemaining ? `Remaining: ${rateLimitRemaining} ` : ""
-              }` +
-              `${resetTime ? `Rate limit will reset at: ${resetTime}` : ""}` +
-              `\n\nTip: Add a GitHub personal access token to increase your rate limit from 60 to 5,000 requests per hour.`
-          );
-        }
-        throw new Error(`Error ${response.status}: ${errorText}`);
-      }
-
-      const result: CrawlerResult = await response.json();
-      setFiles(result.files);
+    } else {
+      result = await githubFileCrawler({
+        repoUrl,
+        token: githubToken,
+        useRelativePaths: true,
+        includePatterns: patternsToInclude,
+        excludePatterns,
+        maxFileSize: 500000,
+      });
+    }
+    setFiles(result.files);
       setStats(result.stats);
     } catch (err) {
       setError(
@@ -240,66 +234,6 @@ export default function Home() {
       );
     } finally {
       setIsLoading(false);
-    }
-  };
-
-  // Helper function to simulate various error conditions
-  const simulateError = async (errorType: string) => {
-    // Simulate network delay
-    await new Promise((resolve) => setTimeout(resolve, 800));
-
-    switch (errorType) {
-      case "rate-limit":
-        // Simulate a rate limit error
-        const resetTime = new Date();
-        resetTime.setMinutes(resetTime.getMinutes() + 30); // Reset in 30 minutes
-
-        throw new Error(
-          `GitHub API rate limit exceeded. ` +
-            `Limit: 60 requests per hour. ` +
-            `Remaining: 0 ` +
-            `Rate limit will reset at: ${resetTime.toLocaleTimeString()}` +
-            `\n\nTip: Add a GitHub personal access token to increase your rate limit from 60 to 5,000 requests per hour.`
-        );
-
-      case "404":
-        // Simulate repository not found
-        throw new Error(
-          "Error 404: Not Found - The repository does not exist or requires authentication"
-        );
-
-      case "401":
-        // Simulate unauthorized access
-        throw new Error(
-          "Error 401: Unauthorized - Authentication is required for this repository"
-        );
-
-      case "500":
-        // Simulate server error
-        throw new Error(
-          "Error 500: Internal Server Error - GitHub is experiencing issues"
-        );
-
-      case "timeout":
-        // Simulate timeout
-        await new Promise((resolve) => setTimeout(resolve, 5000));
-        throw new Error(
-          "Request timed out - The GitHub API is taking too long to respond"
-        );
-
-      case "network":
-        // Simulate network error
-        throw new Error("Network error - Unable to connect to GitHub API");
-
-      case "parse":
-        // Simulate JSON parse error
-        throw new Error(
-          "Failed to parse response from GitHub - Invalid JSON received"
-        );
-
-      default:
-        // Default error
-        throw new Error(`Test error: ${errorType || "unspecified error"}`);
     }
   };
 
