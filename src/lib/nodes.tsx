@@ -3,7 +3,7 @@
  * -------------------------------------------------------------------------
  * TypeScript conversion of the Python nodes.py script for Next.js.
  * Assumes availability of pocketflow Node/BatchNode, js-yaml, and utility
- * functions (githubFileCrawler, crawlLocalFiles, callLLM).
+ * functions (githubFileCrawler, callLLM).
  * Handles async operations and uses Node.js built-in modules.
  * ------------------------------------------------------------------------- */
 
@@ -162,45 +162,18 @@ export class FetchRepo extends Node<SharedData> {
     } = await prepRes;
 
     let result: CrawlerResult;
-
-    const useMockGitHubFlag = process.env.USE_MOCK_GITHUB; // Check for test flag
-
-    // make a fake crawler result here for repoUrl
-    if (useMockGitHubFlag == "true") {
-      console.log(`FAKE MOCK REPO Crawling repository:...`);
-     result = await githubFileCrawler({
-        repoUrl: "mock-mode", // This value will be ignored when useMock=true
-        token: token,
-        useRelativePaths: true,
-        includePatterns,
-        excludePatterns,
-        maxFileSize: 500000,
-        useMock: true, // This is what matters - it will trigger mock data generation
-      });
-    } else if (repoUrl && useMockGitHubFlag!= "true") {
-      //Call the appropriate crawling function based on whether repoUrl is provided
-      console.log(`Crawling repository: ${repoUrl}...`);
-      result = await githubFileCrawler({
-        // Assuming async
-        repoUrl: repoUrl,
-        token: token,
-        includePatterns: includePatterns,
-        excludePatterns: excludePatterns,
-        maxFileSize: maxFileSize,
-        useRelativePaths: useRelativePaths,
-      });
-    }
-    //  else if (localDir) {
-    //     console.log(`Crawling directory: ${localDir}...`);
-    //     result = await githubFileCrawler({ // Assuming async
-    //       directory: localDir,
-    //       include_patterns: includePatterns,
-    //       exclude_patterns: excludePatterns,
-    //       max_file_size: maxFileSize,
-    //       use_relative_paths: useRelativePaths,
-    //     });
-    //   }
-    else {
+    if(repoUrl){
+    console.log(`Crawling repository: ${repoUrl}...`);
+    result = await githubFileCrawler({
+      // Assuming async
+      repoUrl: repoUrl,
+      token: token,
+      includePatterns: includePatterns,
+      excludePatterns: excludePatterns,
+      maxFileSize: maxFileSize,
+      useRelativePaths: useRelativePaths,
+    });
+    } else { 
       throw new Error("No repository URL or local directory provided.");
     }
 
@@ -326,11 +299,20 @@ Format the output as a YAML list of dictionaries:
   file_indices:
     - 0 # path/to/file1.py
     - 3 # path/to/related.py
+- name: |
+    Query Optimization${nameLangHint}
+  description: |
+    Another core concept, similar to a blueprint for objects.${descLangHint}
+  file_indices:
+    - 5 # path/to/another.js
 # ... up to ${maxAbs} abstractions
 \`\`\``;
 
-    // Call the LLM (assuming it's async)
-    const response = await callLLM({ prompt, useCache }); // Pass useCache flag
+    // Call the LLM with cache context
+    const response = await callLLM({ 
+      prompt, 
+      useCache
+    });
 
     // Extract YAML block from the response
     const yamlMatch = response.trim().match(/```yaml\s*([\s\S]*?)\s*```/);
@@ -543,11 +525,20 @@ relationships:
   - from_abstraction: 0 # AbstractionName1
     to_abstraction: 1 # AbstractionName2
     label: "Manages"${langHint}
+  - from_abstraction: 2 # AbstractionName3
+    to_abstraction: 0 # AbstractionName1
+    label: "Provides config"${langHint}
   # ... other relationships
+
+
+Now, provide the YAML output:
 \`\`\``;
 
-    // Call the LLM (assuming async)
-    const response = await callLLM({ prompt, useCache });
+    // Call the LLM with cache context
+    const response = await callLLM({ 
+      prompt, 
+      useCache,
+    });
 
     // Extract YAML block
     const yamlMatch = response.trim().match(/```yaml\s*([\s\S]*?)\s*```/);
@@ -782,8 +773,12 @@ Output the ordered list of abstraction indices, including the name in a comment 
 
 Now, provide the YAML output:`;
 
-    // Call the LLM (assuming async)
-    const response = await callLLM({ prompt, useCache });
+
+    // Call the LLM with cache context
+    const response = await callLLM({ 
+      prompt, 
+      useCache,
+    });
 
     // Extract YAML block
     const yamlMatch = response.trim().match(/```yaml\s*([\s\S]*?)\s*```/);
@@ -1099,7 +1094,7 @@ ${
 Now, directly provide a super beginner-friendly Markdown output (DON'T need \`\`\`markdown\`\`\` tags):`;
 
     // Call the LLM (assuming async)
-    let chapterContent = await callLLM({ prompt, useCache });
+    let chapterContent = await callLLM({prompt});
 
     // --- Basic Validation/Cleanup ---
     // Ensure the heading is present and correct

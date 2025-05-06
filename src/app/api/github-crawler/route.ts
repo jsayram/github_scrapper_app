@@ -142,6 +142,14 @@ function parseGitHubUrl(url: string) {
   return { owner, repo, ref, path };
 }
 
+// Replace browser-only atob() with Node.js compatible approach
+function decodeBase64(base64String: string): string {
+  // Remove any newlines that might be in the base64 string
+  const cleanBase64 = base64String.replace(/\n/g, '');
+  // Use Buffer for Node.js environments
+  return Buffer.from(cleanBase64, 'base64').toString('utf-8');
+}
+
 // HYBRID APPROACH: Function to crawl GitHub files - tries Tree API first, falls back to directory crawling
 async function crawlGitHubFiles({ 
   owner, 
@@ -183,40 +191,40 @@ async function crawlGitHubFiles({
   // First try the tree API approach for efficiency
   try {
     // Get default branch if ref is not specified
-    if (!ref) {
-      const repoUrl = `https://api.github.com/repos/${owner}/${repo}`;
-      const headers: HeadersInit = token ? { 'Authorization': `token ${token}` } : {};
-      const repoResponse = await fetch(repoUrl, { headers });
-      requestCount++;
+    // if (!ref) {
+    //   const repoUrl = `https://api.github.com/repos/${owner}/${repo}`;
+    //   const headers: HeadersInit = token ? { 'Authorization': `token ${token}` } : {};
+    //   const repoResponse = await fetch(repoUrl, { headers });
+    //   requestCount++;
       
-      // Check for rate limit headers
-      const rateLimitHeaders: Record<string, string> = {};
-      ['x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset'].forEach(header => {
-        const value = repoResponse.headers.get(header);
-        if (value) rateLimitHeaders[header] = value;
-      });
+    //   // Check for rate limit headers
+    //   const rateLimitHeaders: Record<string, string> = {};
+    //   ['x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset'].forEach(header => {
+    //     const value = repoResponse.headers.get(header);
+    //     if (value) rateLimitHeaders[header] = value;
+    //   });
       
-      if (!repoResponse.ok) {
-        const errorText = await repoResponse.text();
+    //   if (!repoResponse.ok) {
+    //     const errorText = await repoResponse.text();
         
-        // Special handling for rate limit errors
-        if (repoResponse.status === 403 && errorText.includes('rate limit')) {
-          throw {
-            rateLimitInfo: {
-              status: 403,
-              message: errorText,
-              headers: rateLimitHeaders
-            }
-          };
-        }
+    //     // Special handling for rate limit errors
+    //     if (repoResponse.status === 403 && errorText.includes('rate limit')) {
+    //       throw {
+    //         rateLimitInfo: {
+    //           status: 403,
+    //           message: errorText,
+    //           headers: rateLimitHeaders
+    //         }
+    //       };
+    //     }
         
-        // If we can't get repo info, fall back to master as common default
-        ref = 'master';
-      } else {
-        const repoInfo = await repoResponse.json();
-        ref = repoInfo.default_branch;
-      }
-    }
+    //     // If we can't get repo info, fall back to master as common default
+    //     ref = 'master';
+    //   } else {
+    //     const repoInfo = await repoResponse.json();
+    //     ref = repoInfo.default_branch;
+    //   }
+    // }
     
     // Get the repository tree recursively to maximize efficiency
     const treeUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/${ref}?recursive=1`;
@@ -350,7 +358,7 @@ async function crawlGitHubFiles({
             
             if (blobData.encoding === 'base64' && blobData.content) {
               try {
-                const decodedContent = atob(blobData.content.replace(/\n/g, ''));
+                const decodedContent = decodeBase64(blobData.content);
                 files[item.relPath] = decodedContent;
               } catch (e) {
                 console.error(`Failed to decode content for ${item.path}`, e);
@@ -484,7 +492,7 @@ async function crawlGitHubFiles({
                 if (contentResponse.ok) {
                   const contentData = await contentResponse.json();
                   if (contentData.encoding === 'base64' && contentData.content) {
-                    const decodedContent = atob(contentData.content);
+                    const decodedContent = decodeBase64(contentData.content);
                     files[relPath] = decodedContent;
                   }
                 } else if (contentResponse.status === 429) {
