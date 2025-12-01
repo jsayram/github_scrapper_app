@@ -29,7 +29,7 @@ import {
   getEnvVarNames,
   type ProviderConfig 
 } from './providers';
-import { cacheLog, createScopedLogger } from './cacheLogger';
+import { createScopedLogger } from './cacheLogger';
 import { 
   createCacheStore, 
   findMatchingEntry, 
@@ -39,7 +39,6 @@ import {
 import {
   PROVIDER_IDS,
   OPENAI_MODELS,
-  type ProviderId,
 } from '@/lib/constants/llm';
 
 const log = createScopedLogger('LLM');
@@ -577,6 +576,41 @@ export async function callLLM({
       // Ignore JSON parse errors
     }
     
+    // Check for token limit errors first (specific handling with helpful message)
+    const tokenLimitPatterns = [
+      /Input tokens exceed the configured limit of (\d+) tokens.*resulted in (\d+) tokens/i,
+      /maximum context length is (\d+)/i,
+      /context_length_exceeded/i,
+      /token.*limit.*exceeded/i,
+      /request too large/i,
+      /payload too large/i,
+    ];
+    
+    for (const pattern of tokenLimitPatterns) {
+      if (pattern.test(err.message || '') || pattern.test(errorDetails)) {
+        // Extract token numbers if available
+        const limitMatch = (err.message || '').match(/limit of (\d+) tokens/i) || errorDetails.match(/limit of (\d+) tokens/i);
+        const requestedMatch = (err.message || '').match(/resulted in (\d+) tokens/i) || errorDetails.match(/resulted in (\d+) tokens/i);
+        
+        const limit = limitMatch ? parseInt(limitMatch[1], 10) : null;
+        const requested = requestedMatch ? parseInt(requestedMatch[1], 10) : null;
+        
+        let suggestion = 'Try reducing the number of files or use a model with a larger context window.';
+        if (limit && requested) {
+          const reductionNeeded = Math.ceil(((requested - limit) / requested) * 100);
+          suggestion = `You need to reduce content by ~${reductionNeeded}%. Try removing ${Math.ceil((requested - limit) / 1000)} files or switching to a larger model (e.g., Gemini 2.5 Flash with 1M tokens).`;
+        }
+        
+        throw new Error(
+          `🚨 Token limit exceeded for ${providerName} (${actualModelId}). ` +
+          (limit && requested 
+            ? `Input: ${requested.toLocaleString()} tokens, Limit: ${limit.toLocaleString()} tokens. `
+            : '') +
+          suggestion
+        );
+      }
+    }
+    
     // Provide helpful error messages based on status code and error type
     if (err.status === 401 || err.code === 'invalid_api_key' || err.message?.includes('authentication_error') || err.message?.includes('invalid x-api-key') || err.message?.includes('Incorrect API key')) {
       throw new Error(
@@ -728,6 +762,183 @@ export async function testProviderConnection(config: ProviderConfig): Promise<{
       message: err.message || 'Unknown error'
     };
   }
+}
+
+/**
+ * Self-healing LLM call with automatic content reduction on token limit errors
+ * Retries with progressively smaller content until it fits within limits
+ */
+export interface SelfHealingOptions extends CallLLMOptions {
+  /** Maximum number of retry attempts */
+  maxRetries?: number;
+  /** Content reduction strategy */
+  reductionStrategy?: 'truncate' | 'summarize' | 'removeFiles';
+  /** Callback when content is reduced */
+  onContentReduced?: (reduction: { 
+    attempt: number; 
+    originalTokens: number; 
+    reducedTokens: number; 
+    reductionPercent: number;
+  }) => void;
+}
+
+export interface SelfHealingResult {
+  content: string;
+  attempts: number;
+  wasReduced: boolean;
+  originalTokens?: number;
+  finalTokens?: number;
+  error?: string;
+}
+
+/**
+ * Parse token limit error to extract limit and requested token counts
+ */
+function parseTokenError(error: string): { isTokenError: boolean; limit?: number; requested?: number } {
+  // Pattern: "Input tokens exceed the configured limit of X tokens. Your messages resulted in Y tokens."
+  const pattern1 = /limit of (\d+) tokens.*resulted in (\d+) tokens/i;
+  // Pattern: "maximum context length is X"
+  const pattern2 = /maximum context length is (\d+)/i;
+  // Pattern: "context_length_exceeded"
+  const pattern3 = /context_length_exceeded/i;
+  
+  let match = error.match(pattern1);
+  if (match) {
+    return { isTokenError: true, limit: parseInt(match[1], 10), requested: parseInt(match[2], 10) };
+  }
+  
+  match = error.match(pattern2);
+  if (match) {
+    return { isTokenError: true, limit: parseInt(match[1], 10) };
+  }
+  
+  if (pattern3.test(error)) {
+    return { isTokenError: true };
+  }
+  
+  return { isTokenError: false };
+}
+
+/**
+ * Estimate token count (simple heuristic: ~3.5 chars per token)
+ */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 3.5);
+}
+
+/**
+ * Reduce content to fit within token limit
+ */
+function reduceContent(
+  prompt: string, 
+  currentTokens: number, 
+  targetTokens: number,
+  strategy: 'truncate' | 'summarize' | 'removeFiles' = 'truncate'
+): string {
+  if (strategy === 'truncate') {
+    // Simple truncation with a note
+    const targetChars = Math.floor(targetTokens * 3.5 * 0.9); // 90% of target for safety
+    if (prompt.length <= targetChars) return prompt;
+    
+    const truncated = prompt.substring(0, targetChars);
+    const lastNewline = truncated.lastIndexOf('\n');
+    
+    return (lastNewline > targetChars * 0.8 ? truncated.substring(0, lastNewline) : truncated) +
+      '\n\n[Content truncated to fit token limit]';
+  }
+  
+  // For other strategies, fall back to truncation
+  return reduceContent(prompt, currentTokens, targetTokens, 'truncate');
+}
+
+/**
+ * Call LLM with self-healing on token limit errors
+ */
+export async function callLLMWithSelfHealing({
+  maxRetries = 3,
+  reductionStrategy = 'truncate',
+  onContentReduced,
+  ...options
+}: SelfHealingOptions): Promise<SelfHealingResult> {
+  let currentPrompt = options.prompt;
+  let attempts = 0;
+  let wasReduced = false;
+  const originalTokens = estimateTokens(options.prompt);
+  let lastError: string | undefined;
+  
+  while (attempts < maxRetries) {
+    attempts++;
+    
+    try {
+      const content = await callLLM({
+        ...options,
+        prompt: currentPrompt,
+      });
+      
+      return {
+        content,
+        attempts,
+        wasReduced,
+        originalTokens,
+        finalTokens: estimateTokens(currentPrompt),
+      };
+    } catch (error) {
+      const err = error as Error;
+      const tokenError = parseTokenError(err.message);
+      
+      // Only retry if it's a token limit error
+      if (!tokenError.isTokenError) {
+        throw error;
+      }
+      
+      lastError = err.message;
+      
+      // Calculate target tokens
+      const currentTokens = tokenError.requested || estimateTokens(currentPrompt);
+      const limitTokens = tokenError.limit || currentTokens * 0.7; // Default to 70% if unknown
+      const targetTokens = Math.floor(limitTokens * 0.85); // Target 85% of limit for safety
+      
+      log.warn('Token limit exceeded, reducing content', {
+        attempt: attempts,
+        currentTokens,
+        limitTokens,
+        targetTokens,
+      });
+      
+      // Reduce content
+      currentPrompt = reduceContent(currentPrompt, currentTokens, targetTokens, reductionStrategy);
+      wasReduced = true;
+      
+      const reducedTokens = estimateTokens(currentPrompt);
+      const reductionPercent = ((originalTokens - reducedTokens) / originalTokens) * 100;
+      
+      // Notify about reduction
+      if (onContentReduced) {
+        onContentReduced({
+          attempt: attempts,
+          originalTokens,
+          reducedTokens,
+          reductionPercent,
+        });
+      }
+      
+      // If we can't reduce further (less than 10% reduction), give up
+      if (reducedTokens > currentTokens * 0.95) {
+        log.error('Cannot reduce content further');
+        break;
+      }
+    }
+  }
+  
+  // All retries exhausted
+  return {
+    content: '',
+    attempts,
+    wasReduced,
+    originalTokens,
+    finalTokens: estimateTokens(currentPrompt),
+    error: lastError || 'Token limit exceeded after all retry attempts',
+  };
 }
 
 /**

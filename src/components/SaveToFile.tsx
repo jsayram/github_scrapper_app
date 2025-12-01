@@ -21,9 +21,6 @@ export default function SaveToFile({ files, repoUrl, onLoadVersion }: SaveToFile
   const [saveMessage, setSaveMessage] = useState('');
   const [versionName, setVersionName] = useState('');
   const [savedVersions, setSavedVersions] = useState<VersionInfo[]>([]);
-  const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
-  const [selectMode, setSelectMode] = useState(false);
-  const [showVersions, setShowVersions] = useState(false);
 
   // Load saved versions on component mount
   useEffect(() => {
@@ -32,8 +29,6 @@ export default function SaveToFile({ files, repoUrl, onLoadVersion }: SaveToFile
 
   const loadSavedVersions = async () => {
     try {
-      // In a real app, this would be an API call
-      // For now, we'll use localStorage
       const versions = localStorage.getItem('savedRepoVersions');
       if (versions) {
         setSavedVersions(JSON.parse(versions));
@@ -41,19 +36,6 @@ export default function SaveToFile({ files, repoUrl, onLoadVersion }: SaveToFile
     } catch (error) {
       console.error('Error loading saved versions:', error);
     }
-  };
-
-  const toggleFileSelection = (filePath: string) => {
-    setSelectedFiles(prev => 
-      prev.includes(filePath) 
-        ? prev.filter(f => f !== filePath)
-        : [...prev, filePath]
-    );
-  };
-
-  const toggleSelectMode = () => {
-    setSelectMode(prev => !prev);
-    setSelectedFiles(selectMode ? [] : Object.keys(files));
   };
 
   const handleSave = async () => {
@@ -66,61 +48,48 @@ export default function SaveToFile({ files, repoUrl, onLoadVersion }: SaveToFile
       setIsSaving(true);
       setSaveMessage('Preparing files...');
 
-      // Filter files if in select mode
-      const filesToSave = selectMode 
-        ? Object.fromEntries(
-            Object.entries(files).filter(([path]) => selectedFiles.includes(path))
-          )
-        : files;
-
-      // Create a unique ID for this version
       const versionId = `repo-${Date.now().toString(36)}`;
-
-      // Create version info
       const versionInfo: VersionInfo = {
         id: versionId,
         name: versionName,
         timestamp: new Date().toISOString(),
         repository: repoUrl,
-        fileCount: Object.keys(filesToSave).length,
+        fileCount: Object.keys(files).length,
       };
 
-      // Create the data to save
       const dataToSave = {
         ...versionInfo,
-        files: filesToSave
+        files
       };
 
-      // Save to localStorage (in a real app, this would be an API call)
       const versions = [...savedVersions, versionInfo];
       localStorage.setItem('savedRepoVersions', JSON.stringify(versions));
       localStorage.setItem(`repoVersion-${versionId}`, JSON.stringify(dataToSave));
       
-      // Update state
       setSavedVersions(versions);
-      setSaveMessage(`Saved version "${versionName}" with ${Object.keys(filesToSave).length} files`);
+      setSaveMessage(`✓ Saved "${versionName}"`);
       setVersionName('');
       
-      // Also download as a file
+      // Auto-download
       downloadAsFile(dataToSave, versionName);
       
+      // Clear message after 3 seconds
+      setTimeout(() => setSaveMessage(''), 3000);
+      
     } catch (error) {
-      setSaveMessage(`Error saving files: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      setSaveMessage(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setIsSaving(false);
     }
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const downloadAsFile = (data: any, name: string) => {
-    // Create JSON file
     const jsonContent = JSON.stringify(data, null, 2);
     const blob = new Blob([jsonContent], { type: 'application/json' });
-    
-    // Create a sanitized filename
     const sanitizedName = name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
     const fileName = `${sanitizedName}-${new Date().toISOString().slice(0, 10)}.json`;
     
-    // Create download link
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -133,7 +102,6 @@ export default function SaveToFile({ files, repoUrl, onLoadVersion }: SaveToFile
 
   const loadVersion = async (versionId: string) => {
     try {
-      // In a real app, this would be an API call
       const savedData = localStorage.getItem(`repoVersion-${versionId}`);
       if (savedData) {
         const parsedData = JSON.parse(savedData);
@@ -144,7 +112,6 @@ export default function SaveToFile({ files, repoUrl, onLoadVersion }: SaveToFile
           repository: parsedData.repository,
           fileCount: parsedData.fileCount
         });
-        setShowVersions(false);
       }
     } catch (error) {
       console.error('Error loading version:', error);
@@ -152,13 +119,10 @@ export default function SaveToFile({ files, repoUrl, onLoadVersion }: SaveToFile
   };
 
   const deleteVersion = async (versionId: string, e: React.MouseEvent) => {
-    e.stopPropagation(); // Prevent triggering the parent onClick
+    e.stopPropagation();
     
     try {
-      // Remove from localStorage
       localStorage.removeItem(`repoVersion-${versionId}`);
-      
-      // Update versions list
       const updatedVersions = savedVersions.filter(v => v.id !== versionId);
       localStorage.setItem('savedRepoVersions', JSON.stringify(updatedVersions));
       setSavedVersions(updatedVersions);
@@ -167,146 +131,130 @@ export default function SaveToFile({ files, repoUrl, onLoadVersion }: SaveToFile
     }
   };
 
-  return (
-    <div className="mt-4 relative">
-      <div className="flex flex-wrap gap-2">
-        <button 
-          type="button"
-          onClick={() => setShowVersions(prev => !prev)}
-          className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 focus:outline-none"
-        >
-          {showVersions ? 'Hide Versions' : 'Manage Versions'}
-        </button>
+  const formatDate = (timestamp: string) => {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    
+    if (days === 0) return 'Today';
+    if (days === 1) return 'Yesterday';
+    if (days < 7) return `${days} days ago`;
+    return date.toLocaleDateString();
+  };
 
-        {!showVersions && (
-          <>
-            <button 
-              type="button"
-              onClick={toggleSelectMode}
-              className={`rounded-md px-4 py-2 text-sm font-medium focus:outline-none ${
-                selectMode 
-                  ? 'bg-green-600 text-white hover:bg-green-700' 
-                  : 'bg-gray-200 text-gray-800 hover:bg-gray-300'
-              }`}
-            >
-              {selectMode ? `Selected: ${selectedFiles.length}` : 'Select Files'}
-            </button>
-          
-            <div className="flex flex-grow gap-2">
-              <input
-                type="text"
-                value={versionName}
-                onChange={(e) => setVersionName(e.target.value)}
-                placeholder="Version name..."
-                className="flex-grow rounded-md border p-2 text-sm dark:bg-gray-800 dark:border-gray-700"
-                disabled={isSaving}
-              />
-              
-              <button 
-                type="button"
-                onClick={handleSave}
-                disabled={isSaving || Object.keys(files).length === 0 || !versionName.trim()}
-                className="rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 focus:outline-none disabled:bg-gray-400"
-              >
-                {isSaving ? 'Saving...' : 'Save Version'}
-              </button>
-            </div>
-          </>
+  return (
+    <div className="bg-white dark:bg-gray-900 border dark:border-gray-700 rounded-xl p-4 shadow-sm">
+      {/* Header */}
+      <div className="flex items-center gap-2 mb-4">
+        <svg className="h-5 w-5 text-purple-600 dark:text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <h3 className="font-semibold text-gray-900 dark:text-gray-100">Version Manager</h3>
+      </div>
+
+      {/* Save New Version */}
+      <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+        <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 block">
+          Save Current State
+        </label>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={versionName}
+            onChange={(e) => setVersionName(e.target.value)}
+            placeholder="Version name (e.g., v1.0, initial)"
+            className="flex-1 px-3 py-2 text-sm border dark:border-gray-600 rounded-lg dark:bg-gray-700 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+            disabled={isSaving}
+            onKeyDown={(e) => e.key === 'Enter' && handleSave()}
+          />
+          <button 
+            type="button"
+            onClick={handleSave}
+            disabled={isSaving || Object.keys(files).length === 0 || !versionName.trim()}
+            className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium rounded-lg transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center gap-2"
+          >
+            {isSaving ? (
+              <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+              </svg>
+            ) : (
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+              </svg>
+            )}
+            Save
+          </button>
+        </div>
+        {saveMessage && (
+          <p className={`mt-2 text-sm ${saveMessage.includes('Error') ? 'text-red-600' : 'text-green-600'}`}>
+            {saveMessage}
+          </p>
         )}
       </div>
-      
-      {saveMessage && (
-        <p className={`mt-2 text-sm ${saveMessage.includes('Error') ? 'text-red-600' : 'text-green-600'}`}>
-          {saveMessage}
-        </p>
-      )}
 
-      {/* File selection list */}
-      {selectMode && !showVersions && (
-        <div className="mt-4 border p-4 rounded-md max-h-64 overflow-y-auto">
-          <div className="flex justify-between mb-2">
-            <h3 className="font-medium">Select Files to Save</h3>
-            <div>
-              <button 
-                type="button"
-                onClick={() => setSelectedFiles(Object.keys(files))} 
-                className="text-xs text-blue-600 mr-2"
-              >
-                Select All
-              </button>
-              <button 
-                type="button"
-                onClick={() => setSelectedFiles([])} 
-                className="text-xs text-red-600"
-              >
-                Deselect All
-              </button>
-            </div>
+      {/* Saved Versions List */}
+      <div>
+        <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 block">
+          Saved Versions ({savedVersions.length})
+        </label>
+        
+        {savedVersions.length === 0 ? (
+          <div className="text-center py-6 text-gray-500 dark:text-gray-400">
+            <svg className="h-8 w-8 mx-auto mb-2 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+            </svg>
+            <p className="text-sm">No saved versions yet</p>
+            <p className="text-xs mt-1">Save your crawled files to load them later</p>
           </div>
-          <ul className="space-y-1">
-            {Object.keys(files).map(filePath => (
-              <li key={filePath} className="flex items-center">
-                <input 
-                  type="checkbox"
-                  id={`file-${filePath}`}
-                  checked={selectedFiles.includes(filePath)}
-                  onChange={() => toggleFileSelection(filePath)}
-                  className="mr-2"
-                />
-                <label 
-                  htmlFor={`file-${filePath}`} 
-                  className="text-sm truncate cursor-pointer"
-                  title={filePath}
-                >
-                  {filePath}
-                </label>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* Versions list */}
-      {showVersions && (
-        <div className="mt-4 border p-4 rounded-md max-h-96 overflow-y-auto">
-          <h3 className="font-medium mb-3">Saved Versions</h3>
-          {savedVersions.length === 0 ? (
-            <p className="text-gray-500 italic">No saved versions yet</p>
-          ) : (
-            <ul className="space-y-2">
-              {savedVersions.map(version => (
-                <li 
-                  key={version.id} 
-                  className="border rounded p-2 hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer"
-                  onClick={() => loadVersion(version.id)}
-                >
-                  <div className="flex justify-between items-center">
-                    <span className="font-medium">{version.name}</span>
-                    <button
-                      type="button"
-                      onClick={(e) => deleteVersion(version.id, e)}
-                      className="text-red-500 hover:text-red-700 text-sm"
-                      title="Delete version"
-                    >
-                      ×
-                    </button>
-                  </div>
-                  <div className="text-xs text-gray-500 flex justify-between mt-1">
-                    <span>
-                      {new Date(version.timestamp).toLocaleDateString()} 
-                      {' • '}
+        ) : (
+          <div className="space-y-2 max-h-64 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600">
+            {savedVersions.slice().reverse().map(version => (
+              <div 
+                key={version.id} 
+                className="group flex items-center gap-3 p-3 border dark:border-gray-700 rounded-lg hover:bg-purple-50 dark:hover:bg-purple-900/20 cursor-pointer transition-colors"
+                onClick={() => loadVersion(version.id)}
+              >
+                <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center">
+                  <svg className="h-5 w-5 text-purple-600 dark:text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                </div>
+                
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-gray-900 dark:text-gray-100 truncate">
+                      {version.name}
+                    </span>
+                    <span className="flex-shrink-0 px-2 py-0.5 text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 rounded">
                       {version.fileCount} files
                     </span>
-                    <span className="truncate max-w-xs" title={version.repository}>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    <span>{formatDate(version.timestamp)}</span>
+                    <span>•</span>
+                    <span className="truncate" title={version.repository}>
                       {version.repository.replace('https://github.com/', '')}
                     </span>
                   </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
+                </div>
+                
+                <button
+                  type="button"
+                  onClick={(e) => deleteVersion(version.id, e)}
+                  className="flex-shrink-0 p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
+                  title="Delete version"
+                >
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -2,9 +2,25 @@ import React from 'react';
 
 interface ErrorMessageProps {
   message: string;
+  /** Callback when user wants to retry with reduced content */
+  onRetryWithReduction?: () => void;
+  /** Callback when user wants to change model */
+  onModelChange?: (providerId: string, modelId: string) => void;
 }
 
-const ErrorMessage: React.FC<ErrorMessageProps> = ({ message }) => {
+// Model suggestions for token limit errors
+const LARGER_MODELS = [
+  { providerId: 'google', modelId: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', contextWindow: 1000000 },
+  { providerId: 'google', modelId: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', contextWindow: 2000000 },
+  { providerId: 'anthropic', modelId: 'claude-sonnet-4-5', name: 'Claude 4.5 Sonnet', contextWindow: 200000 },
+  { providerId: 'openai', modelId: 'gpt-5', name: 'GPT-5', contextWindow: 200000 },
+];
+
+const ErrorMessage: React.FC<ErrorMessageProps> = ({ 
+  message, 
+  onRetryWithReduction,
+  onModelChange,
+}) => {
   if (!message) return null;
   
   // Check if this is a rate limit error (contains the detailed instructions)
@@ -12,6 +28,13 @@ const ErrorMessage: React.FC<ErrorMessageProps> = ({ message }) => {
   
   // Check if this is an authentication error
   const isAuthError = message.includes('authentication failed') || message.includes('Bad credentials') || message.includes('Invalid or expired token');
+  
+  // Check if this is a token limit error
+  const isTokenLimitError = message.includes('🚨') && (
+    message.includes('Token limit') || 
+    message.includes('token') && message.includes('limit') ||
+    message.includes('exceed') && message.includes('token')
+  );
   
   // Function to convert URLs in text to clickable links
   const renderWithLinks = (text: string) => {
@@ -35,6 +58,102 @@ const ErrorMessage: React.FC<ErrorMessageProps> = ({ message }) => {
       return part;
     });
   };
+  
+  // Token limit error - special handling with recovery options
+  if (isTokenLimitError) {
+    // Parse token numbers from error message
+    const limitMatch = message.match(/Limit:\s*([\d,]+)/i);
+    const inputMatch = message.match(/Input:\s*([\d,]+)/i);
+    
+    const limitTokens = limitMatch ? parseInt(limitMatch[1].replace(/,/g, ''), 10) : null;
+    const inputTokens = inputMatch ? parseInt(inputMatch[1].replace(/,/g, ''), 10) : null;
+    
+    // Calculate reduction needed
+    const reductionPercent = limitTokens && inputTokens 
+      ? Math.ceil(((inputTokens - limitTokens) / inputTokens) * 100)
+      : null;
+    
+    // Filter suggestions to show larger models than current
+    const suggestions = LARGER_MODELS.filter(m => 
+      inputTokens ? m.contextWindow > inputTokens : m.contextWindow > (limitTokens || 200000)
+    );
+    
+    return (
+      <div className="bg-red-50 dark:bg-red-900/20 border border-red-300 dark:border-red-700 rounded-lg mb-6 overflow-hidden">
+        {/* Main error header */}
+        <div className="bg-red-100 dark:bg-red-900/40 px-4 py-3 border-b border-red-200 dark:border-red-700">
+          <div className="flex items-center gap-2">
+            <span className="text-2xl">🚨</span>
+            <p className="text-red-800 dark:text-red-200 font-semibold">Token Limit Exceeded</p>
+          </div>
+        </div>
+        
+        {/* Error details */}
+        <div className="px-4 py-4 text-sm">
+          <p className="text-red-700 dark:text-red-300 mb-3">{message}</p>
+          
+          {limitTokens && inputTokens && (
+            <div className="bg-red-100 dark:bg-red-900/30 rounded-lg p-3 mb-3">
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <span className="text-red-600 dark:text-red-400">Requested:</span>
+                  <span className="font-mono font-bold ml-2">{inputTokens.toLocaleString()}</span>
+                </div>
+                <div>
+                  <span className="text-red-600 dark:text-red-400">Limit:</span>
+                  <span className="font-mono font-bold ml-2">{limitTokens.toLocaleString()}</span>
+                </div>
+              </div>
+              {reductionPercent && (
+                <p className="mt-2 text-red-600 dark:text-red-400">
+                  You need to reduce content by approximately <strong>{reductionPercent}%</strong>
+                </p>
+              )}
+            </div>
+          )}
+          
+          <p className="text-gray-600 dark:text-gray-400 mb-3">
+            <strong>How to fix this:</strong>
+          </p>
+          <ul className="list-disc list-inside text-gray-600 dark:text-gray-400 space-y-1 mb-4">
+            <li>Select fewer files for the tutorial</li>
+            <li>Remove large files (tests, generated code, etc.)</li>
+            <li>Use a model with a larger context window</li>
+          </ul>
+        </div>
+        
+        {/* Actions */}
+        <div className="px-4 py-3 bg-red-100/50 dark:bg-red-900/30 border-t border-red-200 dark:border-red-700 space-y-3">
+          {onRetryWithReduction && (
+            <button
+              onClick={onRetryWithReduction}
+              className="w-full px-4 py-2 bg-orange-500 text-white font-medium rounded-md hover:bg-orange-600 transition-colors text-sm flex items-center justify-center gap-2"
+            >
+              <span>🔄</span>
+              Auto-reduce content & retry
+            </button>
+          )}
+          
+          {onModelChange && suggestions.length > 0 && (
+            <div>
+              <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">Or switch to a larger model:</p>
+              <div className="flex flex-wrap gap-2">
+                {suggestions.map((s) => (
+                  <button
+                    key={`${s.providerId}-${s.modelId}`}
+                    onClick={() => onModelChange(s.providerId, s.modelId)}
+                    className="px-3 py-1.5 text-xs font-medium bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors"
+                  >
+                    {s.name} ({(s.contextWindow / 1000000).toFixed(1)}M tokens)
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
   
   if (isRateLimitError || isAuthError) {
     // Parse the structured error message

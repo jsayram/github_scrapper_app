@@ -270,6 +270,10 @@ export async function POST(request: Request) {
 }
 
 // Helper function to parse GitHub URLs
+// Note: Branch names with slashes (e.g., feature/branch) are tricky to parse from URLs
+// because we can't distinguish between branch parts and path parts.
+// We'll use 'HEAD' for tree URLs to let GitHub resolve the default branch,
+// unless the URL explicitly contains a branch reference.
 function parseGitHubUrl(url: string) {
   const parsedUrl = new URL(url);
   const pathParts = parsedUrl.pathname.split('/').filter(Boolean);
@@ -280,9 +284,48 @@ function parseGitHubUrl(url: string) {
   let ref = '';
   let path = '';
   
-  if (pathParts.length > 2 && pathParts[2] === 'tree') {
-    ref = pathParts[3];
-    path = pathParts.slice(4).join('/');
+  // Handle different URL formats:
+  // 1. https://github.com/owner/repo - no tree/blob, use default branch
+  // 2. https://github.com/owner/repo/tree/branch - with explicit branch
+  // 3. https://github.com/owner/repo/tree/branch/path/to/dir - branch + path
+  // 4. https://github.com/owner/repo/blob/branch/path/to/file - file URL
+  
+  if (pathParts.length > 2) {
+    const type = pathParts[2]; // 'tree' or 'blob'
+    
+    if (type === 'tree' || type === 'blob') {
+      // The remaining parts could be branch + path, but branches can have slashes
+      // We can't reliably distinguish, so we'll use a smarter approach:
+      // For now, join everything after 'tree' as the ref (branch name)
+      // and rely on GitHub to resolve it. If the tree API fails, we'll try HEAD.
+      const remainingParts = pathParts.slice(3);
+      
+      if (remainingParts.length > 0) {
+        // Set the full remaining path as ref initially
+        // The Tree API will handle this, or we'll fallback to HEAD
+        ref = remainingParts.join('/');
+      }
+    }
+  }
+  
+  // If ref contains known branch prefixes, we should use it
+  // Otherwise, return empty ref to use HEAD/default branch
+  // Common patterns: main, master, develop, feature/*, bugfix/*, release/*
+  const looksLikeBranch = ref && (
+    ref === 'main' || 
+    ref === 'master' || 
+    ref === 'develop' ||
+    ref.startsWith('feature/') ||
+    ref.startsWith('bugfix/') ||
+    ref.startsWith('hotfix/') ||
+    ref.startsWith('release/') ||
+    /^v?\d+(\.\d+)*$/.test(ref) // version tags like v1.0.0
+  );
+  
+  // If it doesn't look like a branch, it might be a path in the default branch
+  if (!looksLikeBranch && ref) {
+    path = ref;
+    ref = ''; // Let it use HEAD
   }
   
   return { owner, repo, ref, path };
@@ -327,6 +370,14 @@ async function crawlGitHubFiles({
   let method = 'unknown';
   let cacheHit = false;
   
+  // Common headers for all GitHub API requests
+  const headers: HeadersInit = {
+    'Accept': 'application/vnd.github.v3+json'
+  };
+  if (token) {
+    headers['Authorization'] = `token ${token}`;
+  }
+  
   // Pre-compile all patterns for faster matching
   if (includePatterns) preCompilePatterns(includePatterns);
   if (excludePatterns) preCompilePatterns(excludePatterns);
@@ -355,38 +406,30 @@ async function crawlGitHubFiles({
     return 500;
   }
   
-  // First try the tree API approach for efficiency
-  try {
-    // Get the repository tree recursively to maximize efficiency
-    const treeUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/${ref || 'HEAD'}?recursive=1`;
-    const headers: HeadersInit = {
-      'Accept': 'application/vnd.github.v3+json'
-    };
+  // Helper function to fetch tree with retry on ref failure
+  async function fetchTree(targetRef: string): Promise<{ tree: unknown; cacheHit: boolean; requestsMade: number }> {
+    const treeUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/${targetRef}?recursive=1`;
     
-    if (token) {
-      headers['Authorization'] = `token ${token}`;
-    }
+    // Create a copy of headers for this request (to add ETag if cached)
+    const requestHeaders: HeadersInit = { ...headers };
     
     // Check ETag cache for conditional request
-    const cacheKey = `tree:${owner}/${repo}:${ref || 'HEAD'}`;
+    const cacheKey = `tree:${owner}/${repo}:${targetRef}`;
     const cached = etagCache.get(cacheKey);
     
     if (cached && (Date.now() - cached.timestamp) < ETAG_CACHE_TTL) {
-      headers['If-None-Match'] = cached.etag;
+      requestHeaders['If-None-Match'] = cached.etag;
     }
     
-    const treeResponse = await fetchWithRetry(treeUrl, { headers });
-    requestCount++;
-    
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let tree: any;
+    const treeResponse = await fetchWithRetry(treeUrl, { headers: requestHeaders });
     
     // Handle 304 Not Modified - use cached data
     if (treeResponse.status === 304 && cached) {
       console.log(`[GitHub] Cache hit for ${owner}/${repo} - using cached tree`);
-      cacheHit = true;
-      tree = cached.data;
-    } else if (!treeResponse.ok) {
+      return { tree: cached.data, cacheHit: true, requestsMade: 1 };
+    }
+    
+    if (!treeResponse.ok) {
       const errorText = await treeResponse.text();
       
       // Track rate limit headers
@@ -413,16 +456,54 @@ async function crawlGitHubFiles({
         };
       }
       
-      throw new Error(`Tree API error: ${treeResponse.status}`);
-    } else {
-      tree = await treeResponse.json();
+      // Check for "No commit found" error - this means the ref is invalid
+      if (treeResponse.status === 404 || errorText.includes('No commit found')) {
+        throw new Error(`REF_NOT_FOUND:${errorText}`);
+      }
       
-      // Cache the response with ETag
-      const etag = treeResponse.headers.get('etag');
-      if (etag) {
-        etagCache.set(cacheKey, { etag, data: tree, timestamp: Date.now() });
+      throw new Error(`Tree API error: ${treeResponse.status} - ${errorText}`);
+    }
+    
+    const treeData = await treeResponse.json();
+    
+    // Cache the response with ETag
+    const etag = treeResponse.headers.get('etag');
+    if (etag) {
+      etagCache.set(cacheKey, { etag, data: treeData, timestamp: Date.now() });
+    }
+    
+    return { tree: treeData, cacheHit: false, requestsMade: 1 };
+  }
+  
+  // First try the tree API approach for efficiency
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let tree: any;
+    let treeRequestCount = 0;
+    
+    // Try with the provided ref first, fallback to HEAD if ref fails
+    const targetRef = ref || 'HEAD';
+    
+    try {
+      const result = await fetchTree(targetRef);
+      tree = result.tree;
+      cacheHit = result.cacheHit;
+      treeRequestCount = result.requestsMade;
+    } catch (refError: unknown) {
+      // If the ref wasn't found and we have a specific ref, try HEAD instead
+      const errorMessage = refError instanceof Error ? refError.message : String(refError);
+      if (errorMessage.startsWith('REF_NOT_FOUND:') && ref) {
+        console.log(`[GitHub] Ref '${ref}' not found, falling back to HEAD (default branch)`);
+        const result = await fetchTree('HEAD');
+        tree = result.tree;
+        cacheHit = result.cacheHit;
+        treeRequestCount = result.requestsMade + 1; // Account for the failed request
+      } else {
+        throw refError;
       }
     }
+    
+    requestCount += treeRequestCount;
     
     // Check if the tree was truncated (too many files)
     if (tree.truncated) {

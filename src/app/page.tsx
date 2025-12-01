@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, FormEvent, useEffect, useRef } from "react";
+import { useState, FormEvent, useEffect } from "react";
 import { getAllExcludedPatterns } from "@/lib/excludedPatterns";
 import {
   githubFileCrawler,
@@ -23,13 +23,12 @@ import ErrorMessage from "@/components/ErrorMessage";
 import LoadingIndicator, { TutorialProgress } from "@/components/LoadingIndicator";
 import StatsDisplay from "@/components/StatsDisplay";
 import FileExplorer from "@/components/FileExplorer";
+import FileSelectionModal from "@/components/FileSelectionModal";
+import FileTypeSelector, { detectFileTypes, FileTypeInfo } from "@/components/FileTypeSelector";
 import {
   PROVIDER_IDS,
   OPENAI_MODELS,
 } from "@/lib/constants/llm";
-import CodeAnalyticsDisplay, {
-  CodeAnalytics,
-} from "@/components/CodeAnalyticsDisplay";
 import Footer from "@/components/Footer";
 import { DocumentationViewer } from "@/components/docs";
 
@@ -63,34 +62,35 @@ export default function Home() {
   const [showFilters, setShowFilters] = useState(false);
   const [showExcludePatterns, setShowExcludePatterns] = useState(false);
   const [includePatterns, setIncludePatterns] = useState<string[]>([
-    "*.py",
-    "*.md",
-    "*.js",
-    "*.ts",
-    "*.tsx",
-    "*.cs",
-    "*.java",
+    "*.py", "**/*.py",
+    "*.md", "**/*.md",
+    "*.js", "**/*.js",
+    "*.ts", "**/*.ts",
+    "*.tsx", "**/*.tsx",
+    "*.cs", "**/*.cs",
+    "*.java", "**/*.java",
   ]);
   const [excludePatterns, setExcludePatterns] = useState<string[]>(
     getAllExcludedPatterns()
   );
   const [showSummary, setShowSummary] = useState(false);
-  const [codeAnalytics, setCodeAnalytics] = useState<CodeAnalytics>({
-    totalLines: 0,
-    totalFiles: 0,
-    languageDistribution: {},
-    fileExtensions: {},
-    avgLinesPerFile: 0,
-    totalFunctions: 0,
-    totalClasses: 0,
-    commentRatio: 0,
-  });
+  
+  // New state for file selection modal
+  const [showFileSelection, setShowFileSelection] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [selectedFilesForTutorial, setSelectedFilesForTutorial] = useState<Record<string, string>>({});
+  
+  // New state for file type selector (auto-detection)
+  const [showFileTypeSelector, setShowFileTypeSelector] = useState(false);
+  const [detectedFileTypes, setDetectedFileTypes] = useState<FileTypeInfo[]>([]);
+  const [isDetecting, setIsDetecting] = useState(false);
   
   // Calculate total characters for cost estimation
   const totalChars = Object.values(files).reduce((sum, content) => sum + content.length, 0);
   const fileCount = Object.keys(files).length;
 
-  const editorRef = useRef<any>(null);
+  // Workflow step tracking: 1 = detect types, 2 = crawl files, 3 = generate tutorial
+  const workflowStep = fileCount > 0 ? (tutorialResult ? 3 : 2) : 1;
 
   // Use the custom hook for notifications
   const { notifications, showNotification, dismissNotification } =
@@ -132,78 +132,67 @@ export default function Home() {
     };
   }, [isLoading, isProcessingTutorial]);
 
-  // Calculate code analytics whenever files change
-  useEffect(() => {
-    if (Object.keys(files).length > 0) {
-      const analytics: CodeAnalytics = {
-        totalLines: 0,
-        totalFiles: Object.keys(files).length,
-        languageDistribution: {},
-        fileExtensions: {},
-        avgLinesPerFile: 0,
-        totalFunctions: 0,
-        totalClasses: 0,
-        commentRatio: 0,
-      };
-
-      let totalComments = 0;
-
-      Object.entries(files).forEach(([path, content]) => {
-        // Count lines
-        const lines = content.split("\n").length;
-        analytics.totalLines += lines;
-
-        // Track file extensions
-        const extension = path.split(".").pop()?.toLowerCase() || "unknown";
-        analytics.fileExtensions[extension] =
-          (analytics.fileExtensions[extension] || 0) + 1;
-
-        // Language distribution based on extension
-        let language = "Unknown";
-        if (["js", "jsx"].includes(extension)) language = "JavaScript";
-        else if (["ts", "tsx"].includes(extension)) language = "TypeScript";
-        else if (["py"].includes(extension)) language = "Python";
-        else if (["java"].includes(extension)) language = "Java";
-        else if (["cs"].includes(extension)) language = "C#";
-        else if (["cpp", "cc", "c", "h", "hpp"].includes(extension))
-          language = "C/C++";
-        else if (["rb"].includes(extension)) language = "Ruby";
-        else if (["go"].includes(extension)) language = "Go";
-        else if (["php"].includes(extension)) language = "PHP";
-        else if (["rs"].includes(extension)) language = "Rust";
-        else if (["swift"].includes(extension)) language = "Swift";
-        else if (["md", "markdown"].includes(extension)) language = "Markdown";
-        else if (["json"].includes(extension)) language = "JSON";
-        else if (["html", "htm"].includes(extension)) language = "HTML";
-        else if (["css"].includes(extension)) language = "CSS";
-        else if (["xml"].includes(extension)) language = "XML";
-        else if (["yml", "yaml"].includes(extension)) language = "YAML";
-
-        analytics.languageDistribution[language] =
-          (analytics.languageDistribution[language] || 0) + 1;
-
-        // Count functions and classes
-        const functionMatches =
-          content.match(
-            /function\s+\w+\s*\([^)]*\)\s*{|=>\s*{|\w+\s*\([^)]*\)\s*{/g
-          ) || [];
-        const classMatches = content.match(/class\s+\w+/g) || [];
-        const commentMatches =
-          content.match(/\/\/.*$|\/\*[\s\S]*?\*\//gm) || [];
-
-        analytics.totalFunctions += functionMatches.length;
-        analytics.totalClasses += classMatches.length;
-        totalComments += commentMatches.length;
-      });
-
-      // Calculate averages
-      analytics.avgLinesPerFile = analytics.totalLines / analytics.totalFiles;
-      analytics.commentRatio = totalComments / analytics.totalLines;
-
-      setCodeAnalytics(analytics);
+  // Step 1: Quick crawl to detect file types (doesn't fetch content, just file list)
+  const handleDetectFileTypes = async () => {
+    if (!repoUrl) {
+      setError("Please enter a repository URL");
+      return;
     }
-  }, [files]);
+    
+    setIsDetecting(true);
+    setError("");
+    setDetectedFileTypes([]);
 
+    try {
+      // Use broad patterns to discover all file types
+      // Use **/*.ext to match files in any directory
+      const broadPatterns = [
+        "**/*.py", "**/*.js", "**/*.ts", "**/*.tsx", "**/*.jsx", "**/*.java", "**/*.cs", "**/*.rb", "**/*.php", "**/*.go", "**/*.rs",
+        "**/*.swift", "**/*.kt", "**/*.dart", "**/*.c", "**/*.cpp", "**/*.h", "**/*.hpp", "**/*.sql", "**/*.sh", "**/*.bash",
+        "**/*.md", "**/*.mdx", "**/*.txt", "**/*.rst", "**/*.json", "**/*.yml", "**/*.yaml", "**/*.xml", "**/*.toml",
+        "**/*.html", "**/*.css", "**/*.scss", "**/*.sass", "**/*.less", "**/*.vue", "**/*.svelte", "**/*.astro",
+        "**/*.graphql", "**/*.gql", "**/*.prisma", "**/*.proto", "**/*.tf", "**/*.lua", "**/*.r", "**/*.R", "**/*.jl",
+        "**/*.hs", "**/*.ex", "**/*.exs", "**/*.erl", "**/*.scala", "**/*.clj", "**/*.cljs", "**/*.groovy", "**/*.pl",
+        "**/*.fs", "**/*.fsx", "**/*.re", "**/*.rei", "**/*.mjs", "**/*.cjs", "**/*.mts", "**/*.cts",
+        "**/Dockerfile", "**/*.dockerfile",
+        // Also match root-level files
+        "*.py", "*.js", "*.ts", "*.tsx", "*.jsx", "*.java", "*.cs", "*.md", "*.json", "*.yml", "*.yaml", "*.xml", "*.toml"
+      ];
+
+      console.log(`[TutorialGen] Detecting file types in ${repoUrl}`);
+      
+      const result: CrawlerResult = await githubFileCrawler({
+        repoUrl,
+        token: githubToken,
+        useRelativePaths: true,
+        includePatterns: broadPatterns,
+        excludePatterns,
+        maxFileSize: 500000,
+      });
+      
+      // Detect file types from the crawled files
+      const detectedTypes = detectFileTypes(result.files);
+      setDetectedFileTypes(detectedTypes);
+      
+      // Show file type selector modal
+      setShowFileTypeSelector(true);
+      
+      showNotification(
+        "info",
+        `Found ${detectedTypes.length} file types`,
+        "Select which file types to include in the full crawl."
+      );
+      
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "An unknown error occurred"
+      );
+    } finally {
+      setIsDetecting(false);
+    }
+  };
+
+  // Step 2: Full crawl with selected file types (called after user confirms file type selection)
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
@@ -234,19 +223,12 @@ export default function Home() {
         return;
       }
 
-      // Only send include patterns if there are some selected
-      // If no patterns are selected, send an empty array to explicitly indicate no patterns
-      // This prevents the backend from using getAllIncludedPatterns()
-      const patternsToInclude =
-        includePatterns.length > 0 ? includePatterns : [];
+      // Use the include patterns selected in the filter section
+      const patternsToInclude = includePatterns.length > 0 ? includePatterns : [];
 
-      let result: CrawlerResult;
-      console.log(
-        `[TutorialGen] Fetching files from ${repoUrl} with patterns: ${patternsToInclude.join(
-          ", "
-        )} and excluded patterns: ${excludePatterns.join(", ")}`
-      );
-      result = await githubFileCrawler({
+      console.log(`[TutorialGen] Full crawl of ${repoUrl} with patterns: ${patternsToInclude.join(", ")}`);
+      
+      const result: CrawlerResult = await githubFileCrawler({
         repoUrl,
         token: githubToken,
         useRelativePaths: true,
@@ -254,8 +236,65 @@ export default function Home() {
         excludePatterns,
         maxFileSize: 500000,
       });
+      
       setFiles(result.files);
       setStats(result.stats);
+      
+      // Show success notification
+      const fileCount = Object.keys(result.files).length;
+      if (fileCount > 0) {
+        showNotification(
+          "success",
+          `Crawled ${fileCount} files`,
+          "Click 'Select Files & Generate' to choose which files to include in the tutorial."
+        );
+      }
+      
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "An unknown error occurred"
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Called when user confirms file type selection - triggers full crawl
+  const handleFileTypeSelectionConfirm = async (selectedPatterns: string[]) => {
+    console.log("[TutorialGen] File types selected:", selectedPatterns);
+    setShowFileTypeSelector(false);
+    
+    // Update include patterns based on selection
+    setIncludePatterns(selectedPatterns);
+    
+    // Trigger full crawl with selected patterns
+    setIsLoading(true);
+    setError("");
+    setFiles({});
+    setStats(null);
+
+    try {
+      console.log(`[TutorialGen] Full crawl with selected patterns: ${selectedPatterns.join(", ")}`);
+      
+      const result: CrawlerResult = await githubFileCrawler({
+        repoUrl,
+        token: githubToken,
+        useRelativePaths: true,
+        includePatterns: selectedPatterns,
+        excludePatterns,
+        maxFileSize: 500000,
+      });
+      
+      setFiles(result.files);
+      setStats(result.stats);
+      
+      const fileCount = Object.keys(result.files).length;
+      showNotification(
+        "success",
+        `Crawled ${fileCount} files`,
+        "Click 'Select Files & Generate' to choose which files to include in the tutorial."
+      );
+      
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "An unknown error occurred"
@@ -268,44 +307,28 @@ export default function Home() {
   const handleCreateTutorial = async () => {
     console.log("[TutorialGen] Create tutorial button clicked");
 
-    // Check if we have a repository URL
-    if (!repoUrl) {
-      setError("Please enter a GitHub repository URL before creating a tutorial.");
+    // Check if we have files crawled
+    if (Object.keys(files).length === 0) {
+      setError("Please crawl a repository first before creating a tutorial.");
       return;
     }
 
+    // Show file selection modal
+    setShowFileSelection(true);
+  };
+
+  // Called when user confirms file selection in modal
+  const handleFileSelectionConfirm = async (selectedFiles: Record<string, string>) => {
+    console.log("[TutorialGen] Files selected for tutorial generation");
+    setShowFileSelection(false);
+    setSelectedFilesForTutorial(selectedFiles);
+    
     setIsProcessingTutorial(true);
     setError("");
 
     try {
-      // First, ensure we have the latest files by fetching them
-      console.log("[TutorialGen] Fetching latest files before tutorial generation");
-      
-      // Only send include patterns if there are some selected
-      const patternsToInclude = includePatterns.length > 0 ? includePatterns : [];
-      
-      console.log(
-        `[TutorialGen] Fetching files from ${repoUrl} with patterns: ${patternsToInclude.join(
-          ", "
-        )} and excluded patterns: ${excludePatterns.join(", ")}`
-      );
-      
-      // Fetch the files using the same crawler function used in handleSubmit
-      const crawlerResult = await githubFileCrawler({
-        repoUrl,
-        token: githubToken,
-        useRelativePaths: true,
-        includePatterns: patternsToInclude,
-        excludePatterns,
-        maxFileSize: 500000,
-      });
-      
-      // Update state with the latest files
-      setFiles(crawlerResult.files);
-      setStats(crawlerResult.stats);
-      
       // Convert files object to array format for API
-      const filesArray = Object.entries(crawlerResult.files);
+      const filesArray = Object.entries(selectedFiles);
       console.log(`[TutorialGen] Using ${filesArray.length} files for tutorial generation`);
       console.log(`[TutorialGen] Repository URL: ${repoUrl}`);
       console.log(`[TutorialGen] Regeneration mode: ${llmConfig.regenerationMode || 'auto'}`);
@@ -316,6 +339,9 @@ export default function Home() {
         hasBaseUrl: !!llmConfig.baseUrl,
         hasLegacyApiKey: !!openaiApiKey,
       });
+
+      // Only send include patterns if there are some selected
+      const patternsToInclude = includePatterns.length > 0 ? includePatterns : [];
 
       // Prepare payload for API request
       const payload = {
@@ -381,7 +407,7 @@ export default function Home() {
         
         for (const line of lines) {
           if (line.startsWith('event: ')) {
-            const eventType = line.slice(7);
+            // Event type marker - continue to next line for data
             continue;
           }
           
@@ -420,7 +446,7 @@ export default function Home() {
                 // Error event
                 throw new Error(data.message);
               }
-            } catch (parseError) {
+            } catch {
               // Ignore parse errors for incomplete data
               if (line.slice(6).trim()) {
                 console.warn("[TutorialGen] Failed to parse SSE data:", line);
@@ -491,6 +517,24 @@ export default function Home() {
       />
 
       <main className="max-w-7xl mx-auto">
+        {/* Workflow Steps Indicator */}
+        <div className="mb-6 flex items-center justify-center gap-2">
+          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium ${workflowStep >= 1 ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300' : 'bg-gray-100 dark:bg-gray-800 text-gray-500'}`}>
+            <span className="w-5 h-5 rounded-full bg-blue-600 text-white text-xs flex items-center justify-center">1</span>
+            Crawl Repository
+          </div>
+          <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium ${workflowStep >= 2 ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300' : 'bg-gray-100 dark:bg-gray-800 text-gray-500'}`}>
+            <span className={`w-5 h-5 rounded-full text-white text-xs flex items-center justify-center ${workflowStep >= 2 ? 'bg-green-600' : 'bg-gray-400'}`}>2</span>
+            Select Files & Generate
+          </div>
+          <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium ${workflowStep >= 3 ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300' : 'bg-gray-100 dark:bg-gray-800 text-gray-500'}`}>
+            <span className={`w-5 h-5 rounded-full text-white text-xs flex items-center justify-center ${workflowStep >= 3 ? 'bg-purple-600' : 'bg-gray-400'}`}>3</span>
+            View Tutorial
+          </div>
+        </div>
+
         <form onSubmit={handleSubmit} className="mb-6">
           {/* Repository URL and GitHub Token form */}
           <RepositoryForm
@@ -522,15 +566,62 @@ export default function Home() {
           <ActionButtons
             isLoading={isLoading}
             isProcessingTutorial={isProcessingTutorial}
+            isDetecting={isDetecting}
+            handleDetectFileTypes={handleDetectFileTypes}
             handleCreateTutorial={handleCreateTutorial}
             files={files}
             repoUrl={repoUrl}
             onLoadVersion={handleLoadVersion}
+            hasFiles={fileCount > 0}
+            hasTutorial={!!tutorialResult}
+            onViewTutorial={() => setShowTutorialViewer(true)}
           />
         </form>
 
-        {/* Error message */}
-        <ErrorMessage message={error} />
+        {/* File Type Selector Modal - shown after detect file types */}
+        <FileTypeSelector
+          detectedTypes={detectedFileTypes}
+          isOpen={showFileTypeSelector}
+          onClose={() => setShowFileTypeSelector(false)}
+          onConfirm={handleFileTypeSelectionConfirm}
+          repoName={repoUrl.split('/').pop()?.replace(/\.git$/, '') || 'Repository'}
+        />
+
+        {/* File Selection Modal */}
+        <FileSelectionModal
+          files={files}
+          isOpen={showFileSelection}
+          onClose={() => setShowFileSelection(false)}
+          onConfirm={handleFileSelectionConfirm}
+          isProcessing={isProcessingTutorial}
+          providerId={llmConfig.providerId}
+          modelId={llmConfig.modelId}
+          onModelChange={(newProviderId, newModelId) => {
+            setLLMConfig(prev => ({
+              ...prev,
+              providerId: newProviderId,
+              modelId: newModelId,
+            }));
+          }}
+        />
+
+        {/* Error message - with token limit recovery options */}
+        <ErrorMessage 
+          message={error} 
+          onModelChange={(newProviderId, newModelId) => {
+            setLLMConfig(prev => ({
+              ...prev,
+              providerId: newProviderId,
+              modelId: newModelId,
+            }));
+            setError(''); // Clear error after model change
+            showNotification(
+              'info',
+              'Model changed',
+              `Switched to ${newModelId}. Try generating again.`
+            );
+          }}
+        />
 
         {/* Loading indicators */}
         <LoadingIndicator type="repository" isLoading={isLoading} />
@@ -580,9 +671,6 @@ export default function Home() {
               onFileSelect={viewFile}
               fileContent={fileContent}
             />
-
-            {/* Code analytics section */}
-            {/* <CodeAnalyticsDisplay analytics={codeAnalytics} /> */}
 
             {/* Generate Repository Summary Button */}
             <div className="mt-8 text-center">

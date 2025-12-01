@@ -7,6 +7,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { type CostEstimate } from '@/lib/costEstimator';
+import { MODEL_CONTEXT_WINDOWS } from '@/lib/constants/llm';
 
 interface CostEstimatorProps {
   providerId: string;
@@ -185,6 +186,34 @@ export function CostEstimator({
           Groq Llama 3.3 or local Ollama to reduce costs.
         </div>
       )}
+      
+      {/* Token Limit Warning */}
+      {(() => {
+        // Check if input tokens might exceed context window
+        const contextWindow = MODEL_CONTEXT_WINDOWS[modelId] || 128000;
+        const inputTokens = estimate.tokens.inputTokens;
+        const percentUsed = (inputTokens / contextWindow) * 100;
+        
+        if (percentUsed > 90) {
+          return (
+            <div className="mt-3 p-2 bg-red-50 dark:bg-red-900/20 rounded text-xs text-red-700 dark:text-red-300">
+              🚨 <strong>Token limit warning:</strong> Input tokens (~{(inputTokens / 1000).toFixed(0)}k) 
+              are at {percentUsed.toFixed(0)}% of the {modelId} context window ({(contextWindow / 1000).toFixed(0)}k).
+              {percentUsed > 100 
+                ? ' You may encounter token limit errors. Consider selecting fewer files or using a model with a larger context window (e.g., Gemini 2.5 Flash with 1M tokens).'
+                : ' Generation may fail. Consider reducing file count or using a larger model.'}
+            </div>
+          );
+        } else if (percentUsed > 70) {
+          return (
+            <div className="mt-3 p-2 bg-yellow-50 dark:bg-yellow-900/20 rounded text-xs text-yellow-700 dark:text-yellow-300">
+              ⚠️ <strong>Token usage high:</strong> Input tokens (~{(inputTokens / 1000).toFixed(0)}k) 
+              are at {percentUsed.toFixed(0)}% of available context. Large outputs may be truncated.
+            </div>
+          );
+        }
+        return null;
+      })()}
 
       {/* Free Tip */}
       {!estimate.isFree && (
