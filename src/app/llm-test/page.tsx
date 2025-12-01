@@ -25,6 +25,13 @@ export default function LlmTestPage() {
   const [usage, setUsage] = useState<{inputTokens: number, outputTokens: number} | null>(null);
   const [responseTime, setResponseTime] = useState<number | null>(null);
   const [cached, setCached] = useState(false);
+  
+  // Custom provider/model states
+  const [useCustomProvider, setUseCustomProvider] = useState(false);
+  const [useCustomModel, setUseCustomModel] = useState(false);
+  const [customProvider, setCustomProvider] = useState('');
+  const [customModel, setCustomModel] = useState('');
+  const [customBaseUrl, setCustomBaseUrl] = useState('');
 
   // Check Ollama status on mount
   useEffect(() => {
@@ -42,17 +49,27 @@ export default function LlmTestPage() {
 
   // Update available models when provider changes
   useEffect(() => {
-    const models = getModelsForProvider(selectedProvider);
-    setAvailableModels(models);
-    if (models.length > 0) {
-      setSelectedModel(models[0]);
+    if (!useCustomProvider) {
+      const models = getModelsForProvider(selectedProvider);
+      setAvailableModels(models);
+      if (models.length > 0 && !useCustomModel) {
+        setSelectedModel(models[0]);
+      }
     }
-  }, [selectedProvider]);
+  }, [selectedProvider, useCustomProvider, useCustomModel]);
+
+  // Get the actual provider and model to use (custom or selected)
+  const effectiveProvider = useCustomProvider ? customProvider : selectedProvider;
+  const effectiveModel = useCustomModel ? customModel : selectedModel;
 
   // Handle the form submission using the API endpoint with selected provider
   const handleApiSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!prompt.trim()) return;
+    if (!effectiveProvider || !effectiveModel) {
+      setApiError('Please select or enter a provider and model');
+      return;
+    }
     
     setApiLoading(true);
     setApiResponse(null);
@@ -69,9 +86,10 @@ export default function LlmTestPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           prompt,
-          provider: selectedProvider,
-          model: selectedModel,
-          customApiKey: apiKey || undefined
+          provider: effectiveProvider,
+          model: effectiveModel,
+          customApiKey: apiKey || undefined,
+          customBaseUrl: customBaseUrl || undefined
         }),
       });
       
@@ -111,43 +129,120 @@ export default function LlmTestPage() {
       <div className="mb-6 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border">
         <h2 className="text-lg font-semibold mb-3">Select Provider & Model</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Provider Selection */}
           <div>
-            <label className="block mb-2 text-sm font-medium">Provider</label>
-            <Select value={selectedProvider} onValueChange={setSelectedProvider}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select provider" />
-              </SelectTrigger>
-              <SelectContent>
-                {Object.values(PROVIDER_IDS).map((provider) => (
-                  <SelectItem 
-                    key={provider} 
-                    value={provider}
-                    disabled={provider === PROVIDER_IDS.OLLAMA && !ollamaAvailable}
-                  >
-                    {getProviderDisplayName(provider)}
-                    {provider === PROVIDER_IDS.OLLAMA && !ollamaAvailable && ' (Offline)'}
-                    {provider === PROVIDER_IDS.GROQ && ' 🆓'}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-sm font-medium">Provider</label>
+              <label className="inline-flex items-center cursor-pointer">
+                <span className="text-xs text-gray-500 mr-2">Custom</span>
+                <input
+                  type="checkbox"
+                  checked={useCustomProvider}
+                  onChange={(e) => {
+                    setUseCustomProvider(e.target.checked);
+                    if (!e.target.checked) {
+                      setCustomProvider('');
+                      setCustomBaseUrl('');
+                    }
+                  }}
+                  className="sr-only peer"
+                />
+                <div className="relative w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+              </label>
+            </div>
+            {useCustomProvider ? (
+              <input
+                type="text"
+                value={customProvider}
+                onChange={(e) => setCustomProvider(e.target.value)}
+                placeholder="e.g., openai, anthropic, mistral..."
+                className="w-full p-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+            ) : (
+              <Select value={selectedProvider} onValueChange={setSelectedProvider}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select provider" />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.values(PROVIDER_IDS).map((provider) => (
+                    <SelectItem 
+                      key={provider} 
+                      value={provider}
+                      disabled={provider === PROVIDER_IDS.OLLAMA && !ollamaAvailable}
+                    >
+                      {getProviderDisplayName(provider)}
+                      {provider === PROVIDER_IDS.OLLAMA && !ollamaAvailable && ' (Offline)'}
+                      {provider === PROVIDER_IDS.GROQ && ' 🆓'}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
           </div>
+          
+          {/* Model Selection */}
           <div>
-            <label className="block mb-2 text-sm font-medium">Model</label>
-            <Select value={selectedModel} onValueChange={setSelectedModel}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select model" />
-              </SelectTrigger>
-              <SelectContent>
-                {availableModels.map((modelId) => (
-                  <SelectItem key={modelId} value={modelId}>
-                    {modelId}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-sm font-medium">Model</label>
+              <label className="inline-flex items-center cursor-pointer">
+                <span className="text-xs text-gray-500 mr-2">Custom</span>
+                <input
+                  type="checkbox"
+                  checked={useCustomModel}
+                  onChange={(e) => {
+                    setUseCustomModel(e.target.checked);
+                    if (!e.target.checked) {
+                      setCustomModel('');
+                    }
+                  }}
+                  className="sr-only peer"
+                />
+                <div className="relative w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+              </label>
+            </div>
+            {useCustomModel ? (
+              <input
+                type="text"
+                value={customModel}
+                onChange={(e) => setCustomModel(e.target.value)}
+                placeholder="e.g., gpt-4o, claude-3-opus, mistral-large..."
+                className="w-full p-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+            ) : (
+              <Select value={selectedModel} onValueChange={setSelectedModel}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select model" />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableModels.map((modelId) => (
+                    <SelectItem key={modelId} value={modelId}>
+                      {modelId}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
           </div>
         </div>
+        
+        {/* Custom Base URL (only shown when using custom provider) */}
+        {useCustomProvider && (
+          <div className="mt-4">
+            <label className="block mb-2 text-sm font-medium">
+              Base URL <span className="text-gray-500 font-normal">(optional - for custom endpoints)</span>
+            </label>
+            <input
+              type="text"
+              value={customBaseUrl}
+              onChange={(e) => setCustomBaseUrl(e.target.value)}
+              placeholder="e.g., https://api.mistral.ai/v1 or http://localhost:11434/v1"
+              className="w-full p-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              Enter the base URL for OpenAI-compatible APIs (e.g., Mistral, Together AI, local LLMs)
+            </p>
+          </div>
+        )}
         
         {/* API Key Input */}
         <div className="mt-4">
@@ -159,7 +254,10 @@ export default function LlmTestPage() {
               type={showApiKey ? 'text' : 'password'}
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
-              placeholder={`Enter ${getProviderDisplayName(selectedProvider)} API key...`}
+              placeholder={useCustomProvider 
+                ? `Enter API key for ${customProvider || 'custom provider'}...`
+                : `Enter ${getProviderDisplayName(selectedProvider)} API key...`
+              }
               className="w-full p-2.5 pr-20 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             />
             <button
@@ -171,9 +269,11 @@ export default function LlmTestPage() {
             </button>
           </div>
           <p className="mt-1 text-xs text-gray-500">
-            {selectedProvider === PROVIDER_IDS.OLLAMA 
+            {!useCustomProvider && selectedProvider === PROVIDER_IDS.OLLAMA 
               ? '🦙 Ollama runs locally - no API key needed'
-              : `Leave empty to use the ${getProviderDisplayName(selectedProvider)} key from your .env.local file`
+              : useCustomProvider
+                ? '🔑 API key is required for custom providers'
+                : `Leave empty to use the ${getProviderDisplayName(selectedProvider)} key from your .env.local file`
             }
           </p>
         </div>
@@ -201,11 +301,12 @@ export default function LlmTestPage() {
         <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm">
           <h2 className="text-xl font-semibold mb-3">Test Multi-Provider LLM</h2>
           <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
-            Using: <span className="font-mono bg-gray-100 dark:bg-gray-800 px-1 rounded">{selectedProvider}</span> / <span className="font-mono bg-gray-100 dark:bg-gray-800 px-1 rounded">{selectedModel}</span>
+            Using: <span className="font-mono bg-gray-100 dark:bg-gray-800 px-1 rounded">{effectiveProvider || '(select provider)'}</span> / <span className="font-mono bg-gray-100 dark:bg-gray-800 px-1 rounded">{effectiveModel || '(select model)'}</span>
+            {(useCustomProvider || useCustomModel) && <span className="ml-2 text-xs text-blue-600 dark:text-blue-400">(custom)</span>}
           </p>
           <button
             onClick={handleApiSubmit}
-            disabled={apiLoading || !prompt}
+            disabled={apiLoading || !prompt || !effectiveProvider || !effectiveModel}
             className="px-4 py-2 bg-gradient-to-r from-purple-500 to-blue-500 text-white rounded-md disabled:opacity-50 mb-4 hover:from-purple-600 hover:to-blue-600 transition-colors w-full font-medium"
           >
             {apiLoading ? 'Processing...' : '🚀 Submit Prompt'}
@@ -267,6 +368,13 @@ export default function LlmTestPage() {
           <div className="p-2 bg-white dark:bg-gray-800 rounded border">🌐 OpenRouter</div>
           <div className="p-2 bg-white dark:bg-gray-800 rounded border">✖️ xAI</div>
           <div className="p-2 bg-white dark:bg-gray-800 rounded border">☁️ Azure</div>
+        </div>
+        <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-900/30 rounded border border-blue-200 dark:border-blue-800">
+          <h4 className="font-medium text-blue-800 dark:text-blue-300 mb-1">💡 Custom Provider Support</h4>
+          <p className="text-sm text-blue-700 dark:text-blue-400">
+            Toggle &quot;Custom&quot; to use any OpenAI-compatible API (Mistral, Together AI, Perplexity, local LLMs, etc.). 
+            Enter the provider name, model ID, and optionally a custom base URL.
+          </p>
         </div>
         <p className="mt-3 text-sm text-gray-700 dark:text-gray-300">
           The Multi-Provider API uses the <code className="bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded">callLLM</code> function which routes to the appropriate SDK based on provider.

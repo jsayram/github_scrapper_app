@@ -18,6 +18,7 @@ import { githubFileCrawler } from "@/lib/githubFileCrawler"; // Assuming this is
 import { callLLM } from "@/lib/llmMultiProvider"; // Updated to use multi-provider LLM
 import { CrawlerResult } from "@/lib/githubFileCrawler"; // Assuming this is the correct import path
 import { PROVIDER_IDS } from "@/lib/constants/llm";
+import { cacheLog } from "@/lib/cacheLogger";
 
 // Define types for shared data for better type safety
 interface SharedData {
@@ -941,12 +942,16 @@ Now, provide the YAML output:`;
 
 /* -------------------------------------------------------------------------
  * WriteChapters (BatchNode)
+ * Supports partial regeneration - uses cached chapters when available
  * ------------------------------------------------------------------------- */
 interface WriteChapterItem {
   chapterNum: number;
   abstractionIndex: number;
   abstractionDetails: Abstraction; // Has potentially translated name/desc
   relatedFilesContentMap: Record<string, string>;
+  chapterSlug: string;  // Unique identifier for caching
+  useCachedContent: boolean;  // Whether to use cached content instead of generating
+  cachedContent?: string;  // Cached chapter content if available
   projectName: string;
   fullChapterListing: string; // Uses potentially translated names
   chapterFilenames: Record<number, ChapterFilenameInfo>; // index -> info (uses potentially translated names)
@@ -976,6 +981,11 @@ export class WriteChapters extends BatchNode<SharedData, WriteChapterItem> {
     const llmProvider = shared.llm_provider || PROVIDER_IDS.OPENAI;
     const llmModel = shared.llm_model;
     const llmBaseUrl = shared.llm_base_url;
+    
+    // Partial regeneration support
+    const regenerationMode = shared.regeneration_mode ?? 'full';
+    const chaptersToRegenerate = shared.chapters_to_regenerate ?? [];
+    const cachedChapters = shared.cached_chapters ?? {};
 
     if (!chapterOrder)
       throw new Error("Chapter order not found in shared state.");
@@ -1013,6 +1023,17 @@ export class WriteChapters extends BatchNode<SharedData, WriteChapterItem> {
     });
 
     const fullChapterListing = allChaptersList.join("\n");
+    
+    // Log regeneration mode
+    if (regenerationMode === 'partial') {
+      const cachedCount = Object.keys(cachedChapters).length;
+      const toRegenerateCount = chaptersToRegenerate.length;
+      cacheLog.info(`Partial regeneration mode: ${cachedCount} cached, ${toRegenerateCount} to regenerate`);
+    } else if (regenerationMode === 'skip') {
+      cacheLog.info(`Skip mode: Using all cached chapters`);
+    } else {
+      cacheLog.info(`Full regeneration mode: Generating all chapters fresh`);
+    }
     const itemsToProcess: WriteChapterItem[] = [];
 
     // Second pass: Prepare items for each chapter
@@ -1037,12 +1058,41 @@ export class WriteChapters extends BatchNode<SharedData, WriteChapterItem> {
         prevChapterIndex !== -1 ? chapterFilenamesMap[prevChapterIndex] : null;
       const nextChapter =
         nextChapterIndex !== -1 ? chapterFilenamesMap[nextChapterIndex] : null;
+        
+      // Generate chapter slug for cache lookup
+      const chapterSlug = createSafeFilename(abstractionDetails.name, i + 1).replace('.md', '');
+      
+      // Determine if we should use cached content
+      let useCachedContent = false;
+      let cachedContent: string | undefined;
+      
+      if (regenerationMode === 'skip') {
+        // Skip mode: use cache for everything if available
+        if (cachedChapters[chapterSlug]) {
+          useCachedContent = true;
+          cachedContent = cachedChapters[chapterSlug];
+          cacheLog.skip(`Using cached chapter: ${chapterSlug}`);
+        }
+      } else if (regenerationMode === 'partial') {
+        // Partial mode: use cache unless chapter is marked for regeneration
+        if (!chaptersToRegenerate.includes(chapterSlug) && cachedChapters[chapterSlug]) {
+          useCachedContent = true;
+          cachedContent = cachedChapters[chapterSlug];
+          cacheLog.skip(`Using cached chapter: ${chapterSlug}`);
+        } else if (chaptersToRegenerate.includes(chapterSlug)) {
+          cacheLog.info(`Regenerating chapter: ${chapterSlug}`);
+        }
+      }
+      // In 'full' or 'partial_reidentify' mode, always regenerate
 
       itemsToProcess.push({
         chapterNum: i + 1,
         abstractionIndex: abstractionIndex,
         abstractionDetails: abstractionDetails,
         relatedFilesContentMap: relatedFilesContentMap,
+        chapterSlug: chapterSlug,
+        useCachedContent: useCachedContent,
+        cachedContent: cachedContent,
         projectName: projectName,
         fullChapterListing: fullChapterListing,
         chapterFilenames: chapterFilenamesMap, // Pass the full map
@@ -1057,7 +1107,10 @@ export class WriteChapters extends BatchNode<SharedData, WriteChapterItem> {
       });
     });
 
-    console.log(`Preparing to write ${itemsToProcess.length} chapters...`);
+    // Log stats
+    const cachedCount = itemsToProcess.filter(item => item.useCachedContent).length;
+    const toGenerateCount = itemsToProcess.length - cachedCount;
+    console.log(`Preparing to write ${itemsToProcess.length} chapters (${cachedCount} from cache, ${toGenerateCount} to generate)...`);
     return itemsToProcess; // Return the list of items for BatchNode processing
   }
 
@@ -1078,10 +1131,20 @@ export class WriteChapters extends BatchNode<SharedData, WriteChapterItem> {
       llmProvider,
       llmModel,
       llmBaseUrl,
+      useCachedContent,
+      cachedContent,
     } = item;
 
     const abstractionName = abstractionDetails.name; // Potentially translated
     const abstractionDescription = abstractionDetails.description; // Potentially translated
+
+    // If using cached content, return it directly without calling LLM
+    if (useCachedContent && cachedContent) {
+      console.log(`Chapter ${chapterNum}: Using cached content for ${abstractionName}`);
+      // Still add to chaptersWrittenSoFar for context
+      this.chaptersWrittenSoFar.push(cachedContent);
+      return cachedContent;
+    }
 
     console.log(
       `Writing chapter ${chapterNum} for: ${abstractionName} using LLM...`

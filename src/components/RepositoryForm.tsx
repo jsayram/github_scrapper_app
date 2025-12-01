@@ -3,6 +3,7 @@
 import React, { useState, useCallback } from 'react';
 import LLMProviderSelector from './LLMProviderSelector';
 import CostEstimator from './CostEstimator';
+import CacheStatusPreview from './CacheStatusPreview';
 import { PROVIDER_IDS, OPENAI_MODELS } from '@/lib/constants/llm';
 
 export interface LLMConfig {
@@ -10,6 +11,7 @@ export interface LLMConfig {
   modelId: string;
   apiKey?: string;
   baseUrl?: string;
+  regenerationMode?: 'full' | 'partial' | 'skip';
 }
 
 interface RepositoryFormProps {
@@ -57,7 +59,13 @@ const RepositoryForm: React.FC<RepositoryFormProps> = ({
     apiKey?: string, 
     baseUrl?: string
   ) => {
-    const newConfig: LLMConfig = { providerId, modelId, apiKey, baseUrl };
+    const newConfig: LLMConfig = { 
+      providerId, 
+      modelId, 
+      apiKey, 
+      baseUrl,
+      regenerationMode: currentConfig.regenerationMode 
+    };
     
     if (onLLMConfigChange) {
       onLLMConfigChange(newConfig);
@@ -69,7 +77,17 @@ const RepositoryForm: React.FC<RepositoryFormProps> = ({
     if (onOpenaiApiKeyChange && apiKey !== undefined) {
       onOpenaiApiKeyChange(apiKey);
     }
-  }, [onLLMConfigChange, onOpenaiApiKeyChange]);
+  }, [onLLMConfigChange, onOpenaiApiKeyChange, currentConfig.regenerationMode]);
+
+  const handleRegenerationModeSelect = useCallback((mode: 'full' | 'partial' | 'skip') => {
+    const newConfig: LLMConfig = { ...currentConfig, regenerationMode: mode };
+    
+    if (onLLMConfigChange) {
+      onLLMConfigChange(newConfig);
+    } else {
+      setInternalLLMConfig(newConfig);
+    }
+  }, [currentConfig, onLLMConfigChange]);
 
   return (
     <div className="space-y-4 mb-4">
@@ -171,6 +189,14 @@ const RepositoryForm: React.FC<RepositoryFormProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Cache Status Preview - show when repo URL is provided */}
+      {repoUrl && (
+        <CacheStatusPreview
+          repoUrl={repoUrl}
+          onModeSelect={handleRegenerationModeSelect}
+        />
+      )}
     </div>
   );
 };

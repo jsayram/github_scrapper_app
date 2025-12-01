@@ -11,6 +11,11 @@ import {
   CombineTutorial,
 } from "@/lib/nodes";
 
+// Import cache and change analysis utilities
+import { loadRepoCache, saveRepoCache, computeContentHash } from "@/lib/repoCache";
+import { analyzeChanges, getChangeSummary, type CurrentFileData } from "@/lib/changeAnalyzer";
+import { cacheLog } from "@/lib/cacheLogger";
+
 /**
  * Creates a Pocket Flow that pulls a GitHub repo and turns it into a multi-chapter tutorial.
  *
@@ -56,7 +61,27 @@ export function createTutorialFlow(skipFetchRepo = false): Flow {
 }
 
 /**
- * Executes the tutorial flow with the provided shared data
+ * Creates a partial regeneration flow that skips abstraction identification
+ * and relationship analysis, only regenerating chapters.
+ */
+export function createPartialRegenerationFlow(): Flow {
+  const orderChapters = new OrderChapters(5, 20);
+  const writeChapters = new WriteChapters(5, 20);
+  const combineTutorial = new CombineTutorial(3, 20);
+
+  // For partial regeneration, we might not need to re-order
+  // but we'll keep it for consistency
+  orderChapters
+    .next(writeChapters)
+    .next(combineTutorial);
+
+  return new Flow(orderChapters);
+}
+
+/**
+ * Executes the tutorial flow with the provided shared data.
+ * Includes intelligent caching and partial regeneration support.
+ * 
  * This function creates a flow instance and runs it, similar to:
  * 
  * ```python
@@ -72,20 +97,95 @@ export async function runTutorialFlow(shared: any): Promise<any> {
   // Check if we should skip the fetch repo step
   // skip_fetch_repo is true when files are already provided
   const skipFetchRepo = shared.skip_fetch_repo === true;
+  const repoUrl = shared.repo_url;
   
   if (skipFetchRepo) {
     console.log(`[TutorialFlow] Skipping FetchRepo step as files are already provided`);
   }
   
-  // Create the flow instance with the appropriate configuration
-  const flow = createTutorialFlow(skipFetchRepo);
+  // Convert files to CurrentFileData format for change analysis
+  const currentFiles: CurrentFileData[] = (shared.files || []).map((f: [string, string]) => ({
+    path: f[0],
+    content: f[1],
+  }));
   
+  // Try to load existing cache for this repo
+  let cache = null;
+  if (repoUrl && shared.use_cache !== false) {
+    try {
+      cache = loadRepoCache(repoUrl);
+      if (cache) {
+        cacheLog.load(`Found cache for ${repoUrl}`, { 
+          chapters: Object.keys(cache.chapters).length,
+          files: cache.files.length
+        });
+      }
+    } catch (error) {
+      cacheLog.warn(`Failed to load cache for ${repoUrl}`, { error });
+    }
+  }
+  
+  // Analyze changes if we have a cache
+  const analysis = analyzeChanges(currentFiles, cache);
+  const changeSummary = getChangeSummary(analysis);
+  
+  cacheLog.info(`Change analysis: ${changeSummary.title}`, { 
+    action: changeSummary.action,
+    description: changeSummary.description 
+  });
+  
+  // Determine regeneration mode based on analysis and user preference
+  let regenerationMode: 'full' | 'partial' | 'partial_reidentify' | 'skip' = 'full';
+  
+  if (shared.force_full_regeneration) {
+    regenerationMode = 'full';
+  } else if (changeSummary.action === 'none' && cache) {
+    regenerationMode = 'skip';
+  } else if (changeSummary.action === 'partial' && cache) {
+    regenerationMode = 'partial';
+  } else if (changeSummary.action === 'reidentify' && cache) {
+    regenerationMode = 'partial_reidentify';
+  }
+  
+  // Update shared with regeneration info
+  shared.regeneration_mode = regenerationMode;
+  shared.chapters_to_regenerate = analysis.chaptersToRegenerate;
+  
+  // If we have cached data, add it to shared
+  if (cache && regenerationMode !== 'full') {
+    // Convert cached chapters to the format expected by WriteChapters
+    const cachedChaptersMap: Record<string, string> = {};
+    for (const [slug, chapter] of Object.entries(cache.chapters)) {
+      cachedChaptersMap[slug] = chapter.content;
+    }
+    shared.cached_chapters = cachedChaptersMap;
+    
+    // Use cached abstractions and relationships for partial modes
+    if (regenerationMode !== 'partial_reidentify' && cache.abstractions) {
+      shared.cached_abstractions = cache.abstractions;
+      shared.cached_relationships = cache.relationships;
+    }
+  }
+  
+  // Log the decision
+  console.log(`[TutorialFlow] Regeneration mode: ${regenerationMode}`);
   console.log(`[TutorialFlow] Running flow with ${shared.files?.length || 0} files`);
   console.log(`[TutorialFlow] Project: ${shared.project_name}`);
   
   try {
-    // Run the flow with the shared data
+    // Create and run the appropriate flow
+    const flow = createTutorialFlow(skipFetchRepo);
     const result = await flow.run(shared);
+    
+    // Save updated cache after successful run
+    if (repoUrl && shared.use_cache !== false) {
+      try {
+        await saveUpdatedCache(repoUrl, shared, currentFiles);
+        cacheLog.save(`Cache saved for ${repoUrl}`);
+      } catch (error) {
+        cacheLog.warn(`Failed to save cache for ${repoUrl}`, { error });
+      }
+    }
     
     console.log(`[TutorialFlow] Flow execution completed successfully`);
     return result;
@@ -93,4 +193,59 @@ export async function runTutorialFlow(shared: any): Promise<any> {
     console.error(`[TutorialFlow] Flow execution failed:`, error);
     throw error;
   }
+}
+
+/**
+ * Save updated cache after tutorial generation
+ */
+async function saveUpdatedCache(
+  repoUrl: string, 
+  shared: any,
+  currentFiles: CurrentFileData[]
+): Promise<void> {
+  const chapters: Record<string, any> = {};
+  
+  // Convert generated chapters to cache format
+  const chapterOrder = shared.chapter_order || [];
+  const chaptersContent = shared.chapters || [];
+  const abstractions = shared.abstractions || [];
+  
+  chapterOrder.forEach((abstractionIndex: number, i: number) => {
+    if (abstractionIndex >= 0 && abstractionIndex < abstractions.length && chaptersContent[i]) {
+      const abs = abstractions[abstractionIndex];
+      const slug = abs.name.replace(/[^a-zA-Z0-9_.-]/g, '_').toLowerCase();
+      
+      chapters[slug] = {
+        title: abs.name,
+        slug: slug,
+        content: chaptersContent[i],
+        abstractionsCovered: [abs.name],
+        dependencies: [], // TODO: Extract from chapter content or relationships
+        generatedAt: new Date().toISOString(),
+        promptHash: computeContentHash(chaptersContent[i]),
+      };
+    }
+  });
+  
+  // Build cache object
+  const cacheData = {
+    repoUrl,
+    repoId: repoUrl.replace(/^https?:\/\//, '').replace(/^github\.com\//, '').replace(/\.git$/, '').replace(/\/$/, '').toLowerCase(),
+    lastCrawlTime: new Date().toISOString(),
+    files: currentFiles.map(f => ({
+      path: f.path,
+      contentHash: computeContentHash(f.content),
+      lastModified: new Date().toISOString(),
+    })),
+    abstractions: shared.abstractions,
+    relationships: shared.relationships,
+    chapterOrder: shared.chapter_order,
+    chapters,
+    metadata: {
+      llmProvider: shared.llm_provider,
+      llmModel: shared.llm_model,
+    },
+  };
+  
+  saveRepoCache(cacheData as any);
 }

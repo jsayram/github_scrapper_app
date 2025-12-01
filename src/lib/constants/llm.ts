@@ -46,9 +46,11 @@ export const PROVIDER_NAMES: Record<ProviderId, string> = {
 export const OPENAI_MODELS = {
   // GPT-5 Series (Flagship - Dec 2025)
   GPT_5_1: 'gpt-5.1',
+  GPT_5: 'gpt-5',
   GPT_5_MINI: 'gpt-5-mini',
-  GPT_5_NANO: 'gpt-5-nano',
-  GPT_5_PRO: 'gpt-5-pro',
+  // GPT-5 Codex Series
+  GPT_5_1_CODEX: 'gpt-5.1-codex',
+  GPT_5_CODEX: 'gpt-5-codex',
   // GPT-4.1 Series
   GPT_4_1: 'gpt-4.1',
   GPT_4_1_MINI: 'gpt-4.1-mini',
@@ -57,6 +59,7 @@ export const OPENAI_MODELS = {
   GPT_4O: 'gpt-4o',
   GPT_4O_MINI: 'gpt-4o-mini',
   // Reasoning Models
+  O3: 'o3',
   O4_MINI: 'o4-mini',
   O3_MINI: 'o3-mini',
   O1: 'o1',
@@ -173,9 +176,11 @@ export const AZURE_MODELS = {
 export const MODEL_DISPLAY_NAMES: Record<string, string> = {
   // OpenAI - GPT-5 Series
   [OPENAI_MODELS.GPT_5_1]: 'GPT-5.1',
+  [OPENAI_MODELS.GPT_5]: 'GPT-5',
   [OPENAI_MODELS.GPT_5_MINI]: 'GPT-5 Mini',
-  [OPENAI_MODELS.GPT_5_NANO]: 'GPT-5 Nano',
-  [OPENAI_MODELS.GPT_5_PRO]: 'GPT-5 Pro',
+  // OpenAI - GPT-5 Codex Series
+  [OPENAI_MODELS.GPT_5_1_CODEX]: 'GPT-5.1 Codex',
+  [OPENAI_MODELS.GPT_5_CODEX]: 'GPT-5 Codex',
   // OpenAI - GPT-4.1 Series
   [OPENAI_MODELS.GPT_4_1]: 'GPT-4.1',
   [OPENAI_MODELS.GPT_4_1_MINI]: 'GPT-4.1 Mini',
@@ -184,6 +189,7 @@ export const MODEL_DISPLAY_NAMES: Record<string, string> = {
   [OPENAI_MODELS.GPT_4O]: 'GPT-4o',
   [OPENAI_MODELS.GPT_4O_MINI]: 'GPT-4o Mini',
   // OpenAI - Reasoning
+  [OPENAI_MODELS.O3]: 'o3',
   [OPENAI_MODELS.O4_MINI]: 'o4-mini',
   [OPENAI_MODELS.O3_MINI]: 'o3-mini',
   [OPENAI_MODELS.O1]: 'o1',
@@ -294,7 +300,7 @@ export const DEFAULT_MODELS: Record<ProviderId, string> = {
 // ============================================================================
 
 export const RECOMMENDED_MODELS: Record<ProviderId, string[]> = {
-  [PROVIDER_IDS.OPENAI]: [OPENAI_MODELS.GPT_5_MINI, OPENAI_MODELS.GPT_5_1, OPENAI_MODELS.GPT_4O_MINI],
+  [PROVIDER_IDS.OPENAI]: [OPENAI_MODELS.GPT_5_MINI, OPENAI_MODELS.GPT_5_1, OPENAI_MODELS.GPT_5, OPENAI_MODELS.GPT_4O_MINI, OPENAI_MODELS.O3],
   [PROVIDER_IDS.ANTHROPIC]: [ANTHROPIC_MODELS.CLAUDE_SONNET_45, ANTHROPIC_MODELS.CLAUDE_HAIKU_45],
   [PROVIDER_IDS.GOOGLE]: [GOOGLE_MODELS.GEMINI_25_FLASH, GOOGLE_MODELS.GEMINI_25_PRO, GOOGLE_MODELS.GEMINI_3_PRO],
   [PROVIDER_IDS.GROQ]: [GROQ_MODELS.GPT_OSS_120B, GROQ_MODELS.LLAMA_4_SCOUT, GROQ_MODELS.LLAMA_31_8B],
@@ -344,9 +350,11 @@ export const API_ENDPOINTS = {
 export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // OpenAI - GPT-5 Series
   [OPENAI_MODELS.GPT_5_1]: 200000,
+  [OPENAI_MODELS.GPT_5]: 200000,
   [OPENAI_MODELS.GPT_5_MINI]: 200000,
-  [OPENAI_MODELS.GPT_5_NANO]: 128000,
-  [OPENAI_MODELS.GPT_5_PRO]: 200000,
+  // OpenAI - GPT-5 Codex Series
+  [OPENAI_MODELS.GPT_5_1_CODEX]: 200000,
+  [OPENAI_MODELS.GPT_5_CODEX]: 200000,
   // OpenAI - GPT-4.1 Series
   [OPENAI_MODELS.GPT_4_1]: 200000,
   [OPENAI_MODELS.GPT_4_1_MINI]: 200000,
@@ -355,6 +363,7 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   [OPENAI_MODELS.GPT_4O]: 128000,
   [OPENAI_MODELS.GPT_4O_MINI]: 128000,
   // OpenAI - Reasoning
+  [OPENAI_MODELS.O3]: 200000,
   [OPENAI_MODELS.O4_MINI]: 200000,
   [OPENAI_MODELS.O3_MINI]: 200000,
   [OPENAI_MODELS.O1]: 200000,
@@ -442,20 +451,23 @@ export interface ModelPricing {
 }
 
 export const MODEL_PRICING: Record<string, ModelPricing> = {
-  // OpenAI - GPT-5 Series
-  [OPENAI_MODELS.GPT_5_1]: { input: 1.25, output: 10.00 },
-  [OPENAI_MODELS.GPT_5_MINI]: { input: 0.25, output: 2.00 },
-  [OPENAI_MODELS.GPT_5_NANO]: { input: 0.05, output: 0.40 },
-  [OPENAI_MODELS.GPT_5_PRO]: { input: 15.00, output: 120.00 },
+  // OpenAI - GPT-5 Series (Standard pricing per 1M tokens)
+  [OPENAI_MODELS.GPT_5_1]: { input: 2.50, output: 20.00 },
+  [OPENAI_MODELS.GPT_5]: { input: 2.50, output: 20.00 },
+  [OPENAI_MODELS.GPT_5_MINI]: { input: 0.45, output: 3.60 },
+  // OpenAI - GPT-5 Codex Series
+  [OPENAI_MODELS.GPT_5_1_CODEX]: { input: 2.50, output: 20.00 },
+  [OPENAI_MODELS.GPT_5_CODEX]: { input: 2.50, output: 20.00 },
   // OpenAI - GPT-4.1 Series
-  [OPENAI_MODELS.GPT_4_1]: { input: 3.00, output: 12.00 },
-  [OPENAI_MODELS.GPT_4_1_MINI]: { input: 0.80, output: 3.20 },
+  [OPENAI_MODELS.GPT_4_1]: { input: 3.50, output: 14.00 },
+  [OPENAI_MODELS.GPT_4_1_MINI]: { input: 0.70, output: 2.80 },
   [OPENAI_MODELS.GPT_4_1_NANO]: { input: 0.20, output: 0.80 },
   // OpenAI - GPT-4o Series
-  [OPENAI_MODELS.GPT_4O]: { input: 2.50, output: 10.00 },
-  [OPENAI_MODELS.GPT_4O_MINI]: { input: 0.15, output: 0.60 },
+  [OPENAI_MODELS.GPT_4O]: { input: 4.25, output: 17.00 },
+  [OPENAI_MODELS.GPT_4O_MINI]: { input: 0.25, output: 1.00 },
   // OpenAI - Reasoning
-  [OPENAI_MODELS.O4_MINI]: { input: 4.00, output: 16.00 },
+  [OPENAI_MODELS.O3]: { input: 3.50, output: 14.00 },
+  [OPENAI_MODELS.O4_MINI]: { input: 2.00, output: 8.00 },
   [OPENAI_MODELS.O3_MINI]: { input: 1.10, output: 4.40 },
   [OPENAI_MODELS.O1]: { input: 15.00, output: 60.00 },
   [OPENAI_MODELS.O1_MINI]: { input: 3.00, output: 12.00 },
@@ -527,17 +539,17 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   [OPENROUTER_MODELS.MIXTRAL_8X7B]: { input: 0.24, output: 0.24 },
   [OPENROUTER_MODELS.CLAUDE_3_OPUS]: { input: 15.00, output: 75.00 },
   
-  // Ollama (free, local)
-  [OLLAMA_MODELS.LLAMA_32]: { input: 0, output: 0 },
-  [OLLAMA_MODELS.LLAMA_31]: { input: 0, output: 0 },
-  [OLLAMA_MODELS.LLAMA_3]: { input: 0, output: 0 },
-  [OLLAMA_MODELS.MISTRAL]: { input: 0, output: 0 },
-  [OLLAMA_MODELS.MIXTRAL]: { input: 0, output: 0 },
-  [OLLAMA_MODELS.CODELLAMA]: { input: 0, output: 0 },
-  [OLLAMA_MODELS.DEEPSEEK_CODER]: { input: 0, output: 0 },
-  [OLLAMA_MODELS.QWEN_25]: { input: 0, output: 0 },
-  [OLLAMA_MODELS.PHI_3]: { input: 0, output: 0 },
-  [OLLAMA_MODELS.GEMMA_2]: { input: 0, output: 0 },
+  // Ollama - Free of charge (local inference)
+  [OLLAMA_MODELS.LLAMA_32]: { input: 0, output: 0 },  // Free of charge
+  [OLLAMA_MODELS.LLAMA_31]: { input: 0, output: 0 },  // Free of charge
+  [OLLAMA_MODELS.LLAMA_3]: { input: 0, output: 0 },   // Free of charge
+  [OLLAMA_MODELS.MISTRAL]: { input: 0, output: 0 },   // Free of charge
+  [OLLAMA_MODELS.MIXTRAL]: { input: 0, output: 0 },   // Free of charge
+  [OLLAMA_MODELS.CODELLAMA]: { input: 0, output: 0 }, // Free of charge
+  [OLLAMA_MODELS.DEEPSEEK_CODER]: { input: 0, output: 0 }, // Free of charge
+  [OLLAMA_MODELS.QWEN_25]: { input: 0, output: 0 },   // Free of charge
+  [OLLAMA_MODELS.PHI_3]: { input: 0, output: 0 },     // Free of charge
+  [OLLAMA_MODELS.GEMMA_2]: { input: 0, output: 0 },   // Free of charge
 };
 
 // ============================================================================
@@ -611,10 +623,10 @@ export function isLocalProvider(providerId: string): boolean {
 }
 
 /**
- * Check if a provider is free (no cost per token)
+ * Check if a provider is free of charge (no cost per token)
  */
 export function isFreeProvider(providerId: string): boolean {
-  return providerId === PROVIDER_IDS.OLLAMA;
+  return providerId === PROVIDER_IDS.OLLAMA; // Ollama is free of charge
 }
 
 /**

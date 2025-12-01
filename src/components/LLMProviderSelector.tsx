@@ -67,11 +67,21 @@ export function LLMProviderSelector({
     latencyMs?: number;
   } | null>(null);
   
+  // Custom provider/model states
+  const [useCustomProvider, setUseCustomProvider] = useState<boolean>(false);
+  const [useCustomModel, setUseCustomModel] = useState<boolean>(false);
+  const [customProviderName, setCustomProviderName] = useState<string>('');
+  const [customModelName, setCustomModelName] = useState<string>('');
+  
   // Get current provider and its models
-  const currentProvider = getProvider(selectedProvider);
+  const currentProvider = useCustomProvider ? null : getProvider(selectedProvider);
   const availableModels = selectedProvider === PROVIDER_IDS.OLLAMA && ollamaStatus.available
     ? ollamaStatus.models
     : currentProvider?.models || [];
+  
+  // Get the effective provider and model (custom or selected)
+  const effectiveProvider = useCustomProvider ? customProviderName : selectedProvider;
+  const effectiveModel = useCustomModel ? customModelName : selectedModel;
 
   // Load preferences on mount
   useEffect(() => {
@@ -94,14 +104,14 @@ export function LLMProviderSelector({
   // Notify parent of changes
   useEffect(() => {
     onProviderChange(
-      selectedProvider,
-      selectedModel,
+      effectiveProvider,
+      effectiveModel,
       apiKey || undefined,
       customBaseUrl || undefined
     );
     
-    // Save preferences if opted in
-    if (rememberChoice) {
+    // Save preferences if opted in (only for non-custom selections)
+    if (rememberChoice && !useCustomProvider && !useCustomModel) {
       savePreferences({
         providerId: selectedProvider,
         modelId: selectedModel,
@@ -109,7 +119,7 @@ export function LLMProviderSelector({
         rememberChoice: true,
       });
     }
-  }, [selectedProvider, selectedModel, apiKey, customBaseUrl, onProviderChange, rememberChoice]);
+  }, [effectiveProvider, effectiveModel, apiKey, customBaseUrl, onProviderChange, rememberChoice, useCustomProvider, useCustomModel, selectedProvider, selectedModel]);
 
   // Check Ollama status
   const checkOllamaStatus = useCallback(async () => {
@@ -177,8 +187,8 @@ export function LLMProviderSelector({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          provider: selectedProvider,
-          model: selectedModel,
+          provider: effectiveProvider,
+          model: effectiveModel,
           apiKey: apiKey || undefined,
           baseUrl: customBaseUrl || undefined,
         }),
@@ -215,73 +225,144 @@ export function LLMProviderSelector({
   };
 
   // Check if current provider needs API key
-  const needsApiKey = currentProvider?.requiresApiKey ?? true;
+  const needsApiKey = useCustomProvider ? true : (currentProvider?.requiresApiKey ?? true);
 
   return (
     <div className={`space-y-4 ${className}`}>
       {/* Provider Selection */}
       <div className="space-y-2">
-        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
-          LLM Provider
-        </label>
-        <Select
-          value={selectedProvider}
-          onValueChange={handleProviderChange}
-          disabled={disabled}
-        >
-          <SelectTrigger className="w-full">
-            <SelectValue placeholder="Select a provider" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              <SelectLabel className="text-xs text-gray-500 dark:text-gray-400 font-semibold px-2 py-1.5">
-                Cloud Providers
-              </SelectLabel>
-              {LLM_PROVIDERS.filter(p => !p.isLocal).map(provider => (
-                <SelectItem key={provider.id} value={provider.id}>
-                  {provider.name} {provider.recommended ? '⭐' : ''}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-            <SelectGroup>
-              <SelectLabel className="text-xs text-gray-500 dark:text-gray-400 font-semibold px-2 py-1.5">
-                Local (Free)
-              </SelectLabel>
-              {LLM_PROVIDERS.filter(p => p.isLocal).map(provider => (
-                <SelectItem key={provider.id} value={provider.id}>
-                  {provider.name} {ollamaStatus.available ? '✓' : '⚠️'} 🆓
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+            LLM Provider
+          </label>
+          <label className="inline-flex items-center cursor-pointer">
+            <span className="text-xs text-gray-500 mr-2">Custom</span>
+            <input
+              type="checkbox"
+              checked={useCustomProvider}
+              onChange={(e) => {
+                setUseCustomProvider(e.target.checked);
+                if (!e.target.checked) {
+                  setCustomProviderName('');
+                }
+              }}
+              disabled={disabled}
+              className="sr-only peer"
+            />
+            <div className="relative w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+          </label>
+        </div>
+        {useCustomProvider ? (
+          <input
+            type="text"
+            value={customProviderName}
+            onChange={(e) => setCustomProviderName(e.target.value)}
+            placeholder="e.g., openai, anthropic, mistral, together..."
+            disabled={disabled}
+            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md 
+                       bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100
+                       focus:ring-2 focus:ring-blue-500 focus:border-blue-500
+                       disabled:opacity-50 disabled:cursor-not-allowed"
+          />
+        ) : (
+          <Select
+            value={selectedProvider}
+            onValueChange={handleProviderChange}
+            disabled={disabled}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select a provider" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectLabel className="text-xs text-gray-500 dark:text-gray-400 font-semibold px-2 py-1.5">
+                  Cloud Providers
+                </SelectLabel>
+                {LLM_PROVIDERS.filter(p => !p.isLocal).map(provider => (
+                  <SelectItem key={provider.id} value={provider.id}>
+                    {provider.name} {provider.recommended ? '⭐' : ''}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+              <SelectGroup>
+                <SelectLabel className="text-xs text-gray-500 dark:text-gray-400 font-semibold px-2 py-1.5">
+                  Local (Free)
+                </SelectLabel>
+                {LLM_PROVIDERS.filter(p => p.isLocal).map(provider => (
+                  <SelectItem key={provider.id} value={provider.id}>
+                    {provider.name} {ollamaStatus.available ? '✓' : '⚠️'} 🆓
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        )}
         <p className="text-xs text-gray-500 dark:text-gray-400">
-          {currentProvider?.description}
+          {useCustomProvider 
+            ? 'Enter any OpenAI-compatible provider name'
+            : currentProvider?.description
+          }
         </p>
       </div>
 
       {/* Model Selection */}
       <div className="space-y-2">
-        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
-          Model
-        </label>
-        <Select
-          value={selectedModel}
-          onValueChange={handleModelChange}
-          disabled={disabled || availableModels.length === 0}
-        >
-          <SelectTrigger className="w-full">
-            <SelectValue placeholder="Select a model" />
-          </SelectTrigger>
-          <SelectContent>
-            {availableModels.map(model => (
-              <SelectItem key={model.id} value={model.id}>
-                {model.name} {model.recommended ? '⭐' : ''} {model.costPer1kInput === 0 ? '🆓' : ''}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {selectedModel && (
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+            Model
+          </label>
+          <label className="inline-flex items-center cursor-pointer">
+            <span className="text-xs text-gray-500 mr-2">Custom</span>
+            <input
+              type="checkbox"
+              checked={useCustomModel}
+              onChange={(e) => {
+                setUseCustomModel(e.target.checked);
+                if (!e.target.checked) {
+                  setCustomModelName('');
+                }
+              }}
+              disabled={disabled}
+              className="sr-only peer"
+            />
+            <div className="relative w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+          </label>
+        </div>
+        {useCustomModel ? (
+          <input
+            type="text"
+            value={customModelName}
+            onChange={(e) => setCustomModelName(e.target.value)}
+            placeholder="e.g., gpt-4o, claude-3-opus, mistral-large..."
+            disabled={disabled}
+            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md 
+                       bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100
+                       focus:ring-2 focus:ring-blue-500 focus:border-blue-500
+                       disabled:opacity-50 disabled:cursor-not-allowed"
+          />
+        ) : (
+          <Select
+            value={selectedModel}
+            onValueChange={handleModelChange}
+            disabled={disabled || availableModels.length === 0}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select a model" />
+            </SelectTrigger>
+            <SelectContent>
+              {availableModels.map(model => (
+                <SelectItem key={model.id} value={model.id}>
+                  {model.name} {model.recommended ? '⭐' : ''} {model.costPer1kInput === 0 ? '🆓' : ''}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        {useCustomModel ? (
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Enter the exact model ID from your provider
+          </p>
+        ) : selectedModel && (
           <p className="text-xs text-gray-500 dark:text-gray-400">
             {availableModels.find(m => m.id === selectedModel)?.description}
           </p>
@@ -293,13 +374,18 @@ export function LLMProviderSelector({
         <div className="space-y-2">
           <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
             API Key
-            <span className="text-gray-400 font-normal ml-1">(optional if set in .env)</span>
+            <span className="text-gray-400 font-normal ml-1">
+              {useCustomProvider ? '(required for custom provider)' : '(optional if set in .env)'}
+            </span>
           </label>
           <input
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder={`Enter ${currentProvider?.name || 'API'} key...`}
+            placeholder={useCustomProvider 
+              ? `Enter API key for ${customProviderName || 'custom provider'}...`
+              : `Enter ${currentProvider?.name || 'API'} key...`
+            }
             disabled={disabled}
             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md 
                        bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100
@@ -307,60 +393,85 @@ export function LLMProviderSelector({
                        disabled:opacity-50 disabled:cursor-not-allowed"
           />
           <p className="text-xs text-gray-500 dark:text-gray-400">
-            Or set <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">
-              {currentProvider?.envVarNames?.[0] || 'API_KEY'}
-            </code> in your .env.local file
+            {useCustomProvider 
+              ? '🔑 API key is required for custom providers'
+              : <>Or set <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">
+                  {currentProvider?.envVarNames?.[0] || 'API_KEY'}
+                </code> in your .env.local file</>
+            }
           </p>
         </div>
       )}
 
-      {/* Custom Base URL (for Ollama or custom endpoints) */}
-      {(selectedProvider === PROVIDER_IDS.OLLAMA || selectedProvider === PROVIDER_IDS.AZURE) && (
+      {/* Custom Base URL (for Ollama, Azure, or custom providers) */}
+      {(useCustomProvider || selectedProvider === PROVIDER_IDS.OLLAMA || selectedProvider === PROVIDER_IDS.AZURE) && (
         <div className="space-y-2">
           <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
             Base URL
-            <span className="text-gray-400 font-normal ml-1">(optional)</span>
+            <span className="text-gray-400 font-normal ml-1">
+              {useCustomProvider ? '(required for custom provider)' : '(optional)'}
+            </span>
           </label>
           <input
             type="text"
             value={customBaseUrl}
             onChange={(e) => setCustomBaseUrl(e.target.value)}
-            placeholder={selectedProvider === PROVIDER_IDS.OLLAMA 
-              ? 'http://localhost:11434/v1' 
-              : 'https://your-resource.openai.azure.com'}
+            placeholder={useCustomProvider
+              ? 'e.g., https://api.mistral.ai/v1 or https://api.together.xyz/v1'
+              : selectedProvider === PROVIDER_IDS.OLLAMA 
+                ? 'http://localhost:11434/v1' 
+                : 'https://your-resource.openai.azure.com'
+            }
             disabled={disabled}
             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md 
                        bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100
                        focus:ring-2 focus:ring-blue-500 focus:border-blue-500
                        disabled:opacity-50 disabled:cursor-not-allowed"
           />
+          {useCustomProvider && (
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              Enter the base URL for OpenAI-compatible APIs (Mistral, Together AI, Perplexity, etc.)
+            </p>
+          )}
         </div>
       )}
 
-      {/* Remember Choice */}
-      <div className="flex items-center gap-2">
-        <input
-          type="checkbox"
-          id="rememberChoice"
-          checked={rememberChoice}
-          onChange={handleRememberChoiceChange}
-          disabled={disabled}
-          className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-        />
-        <label 
-          htmlFor="rememberChoice" 
-          className="text-sm text-gray-700 dark:text-gray-300 cursor-pointer"
-        >
-          Remember my choice
-        </label>
-        <span className="text-xs text-gray-400">(API keys are never stored)</span>
-      </div>
+      {/* Remember Choice - hide when using custom */}
+      {!useCustomProvider && !useCustomModel && (
+        <div className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            id="rememberChoice"
+            checked={rememberChoice}
+            onChange={handleRememberChoiceChange}
+            disabled={disabled}
+            className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+          />
+          <label 
+            htmlFor="rememberChoice" 
+            className="text-sm text-gray-700 dark:text-gray-300 cursor-pointer"
+          >
+            Remember my choice
+          </label>
+          <span className="text-xs text-gray-400">(API keys are never stored)</span>
+        </div>
+      )}
+      
+      {/* Current Selection Display */}
+      {(useCustomProvider || useCustomModel) && (
+        <div className="p-2 bg-blue-50 dark:bg-blue-900/30 rounded border border-blue-200 dark:border-blue-800 text-sm">
+          <p className="text-blue-700 dark:text-blue-300">
+            Using: <span className="font-mono">{effectiveProvider || '(enter provider)'}</span> / <span className="font-mono">{effectiveModel || '(enter model)'}</span>
+            <span className="ml-2 text-xs">(custom)</span>
+          </p>
+        </div>
+      )}
 
       {/* Test Connection Button */}
       <div className="flex items-center gap-3">
         <button
           onClick={handleTestConnection}
-          disabled={disabled || testingConnection}
+          disabled={disabled || testingConnection || !effectiveProvider || !effectiveModel}
           className="px-4 py-2 text-sm font-medium text-white bg-gray-600 hover:bg-gray-700 
                      dark:bg-gray-500 dark:hover:bg-gray-600 rounded-md
                      disabled:opacity-50 disabled:cursor-not-allowed
@@ -403,8 +514,24 @@ export function LLMProviderSelector({
         )}
       </div>
 
+      {/* Custom Provider Help */}
+      {useCustomProvider && (
+        <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-md">
+          <p className="text-sm text-blue-800 dark:text-blue-200">
+            <strong>💡 Custom Provider Tips:</strong>
+          </p>
+          <ul className="mt-2 text-xs text-blue-700 dark:text-blue-300 list-disc list-inside space-y-1">
+            <li>For OpenAI-compatible APIs, use provider name like &quot;openai&quot;</li>
+            <li>Mistral: provider=&quot;mistral&quot;, base URL=&quot;https://api.mistral.ai/v1&quot;</li>
+            <li>Together AI: provider=&quot;openai&quot;, base URL=&quot;https://api.together.xyz/v1&quot;</li>
+            <li>Perplexity: provider=&quot;openai&quot;, base URL=&quot;https://api.perplexity.ai&quot;</li>
+            <li>Local LLMs: Use your server&apos;s base URL with compatible models</li>
+          </ul>
+        </div>
+      )}
+
       {/* Ollama Help */}
-      {selectedProvider === PROVIDER_IDS.OLLAMA && !ollamaStatus.available && (
+      {!useCustomProvider && selectedProvider === PROVIDER_IDS.OLLAMA && !ollamaStatus.available && (
         <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md">
           <p className="text-sm text-yellow-800 dark:text-yellow-200">
             <strong>Ollama not detected.</strong> To use local models:

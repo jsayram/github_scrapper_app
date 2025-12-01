@@ -102,6 +102,28 @@ export default function Home() {
     }
   }, []);
 
+  // Warn user before navigating away during active operations
+  useEffect(() => {
+    const isWorking = isLoading || isProcessingTutorial;
+    
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (isWorking) {
+        e.preventDefault();
+        // Modern browsers require returnValue to be set
+        e.returnValue = '';
+        return '';
+      }
+    };
+
+    if (isWorking) {
+      window.addEventListener('beforeunload', handleBeforeUnload);
+    }
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [isLoading, isProcessingTutorial]);
+
   // Calculate code analytics whenever files change
   useEffect(() => {
     if (Object.keys(files).length > 0) {
@@ -278,6 +300,7 @@ export default function Home() {
       const filesArray = Object.entries(crawlerResult.files);
       console.log(`[TutorialGen] Using ${filesArray.length} files for tutorial generation`);
       console.log(`[TutorialGen] Repository URL: ${repoUrl}`);
+      console.log(`[TutorialGen] Regeneration mode: ${llmConfig.regenerationMode || 'auto'}`);
 
       // Prepare payload for API request
       const payload = {
@@ -295,6 +318,9 @@ export default function Home() {
         llm_model: llmConfig.modelId,
         llm_api_key: llmConfig.apiKey || openaiApiKey || undefined,
         llm_base_url: llmConfig.baseUrl || undefined,
+        // Regeneration mode for partial cache usage
+        regeneration_mode: llmConfig.regenerationMode || undefined,
+        force_full_regeneration: llmConfig.regenerationMode === 'full',
         // Legacy: also pass openai_api_key for backward compatibility
         openai_api_key: llmConfig.apiKey || openaiApiKey || undefined,
       };
