@@ -16,13 +16,17 @@ import Header from "@/components/Header";
 import NotificationSystem, {
   useNotifications,
 } from "@/components/NotificationSystem";
-import RepositoryForm from "@/components/RepositoryForm";
+import RepositoryForm, { LLMConfig } from "@/components/RepositoryForm";
 import FilterSection from "@/components/FilterSection";
 import ActionButtons from "@/components/ActionButtons";
 import ErrorMessage from "@/components/ErrorMessage";
 import LoadingIndicator from "@/components/LoadingIndicator";
 import StatsDisplay from "@/components/StatsDisplay";
 import FileExplorer from "@/components/FileExplorer";
+import {
+  PROVIDER_IDS,
+  OPENAI_MODELS,
+} from "@/lib/constants/llm";
 import CodeAnalyticsDisplay, {
   CodeAnalytics,
 } from "@/components/CodeAnalyticsDisplay";
@@ -32,6 +36,14 @@ export default function Home() {
   // State management
   const [repoUrl, setRepoUrl] = useState("");
   const [githubToken, setGithubToken] = useState("");
+  const [openaiApiKey, setOpenaiApiKey] = useState("");
+  
+  // New LLM configuration state
+  const [llmConfig, setLLMConfig] = useState<LLMConfig>({
+    providerId: PROVIDER_IDS.OPENAI,
+    modelId: OPENAI_MODELS.GPT_4O_MINI,
+  });
+  
   const [files, setFiles] = useState<Record<string, string>>({});
   const [stats, setStats] = useState<FileStats | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -65,6 +77,10 @@ export default function Home() {
     totalClasses: 0,
     commentRatio: 0,
   });
+  
+  // Calculate total characters for cost estimation
+  const totalChars = Object.values(files).reduce((sum, content) => sum + content.length, 0);
+  const fileCount = Object.keys(files).length;
 
   const editorRef = useRef<any>(null);
 
@@ -274,6 +290,13 @@ export default function Home() {
         use_cache: true,
         max_abstraction_num: 5,
         max_file_size: 500000,
+        // New multi-provider LLM configuration
+        llm_provider: llmConfig.providerId,
+        llm_model: llmConfig.modelId,
+        llm_api_key: llmConfig.apiKey || openaiApiKey || undefined,
+        llm_base_url: llmConfig.baseUrl || undefined,
+        // Legacy: also pass openai_api_key for backward compatibility
+        openai_api_key: llmConfig.apiKey || openaiApiKey || undefined,
       };
 
       console.log(`[TutorialGen] Making API request to /api/tutorial-generator`);
@@ -397,6 +420,12 @@ export default function Home() {
             onRepoUrlChange={setRepoUrl}
             githubToken={githubToken}
             onGithubTokenChange={setGithubToken}
+            openaiApiKey={openaiApiKey}
+            onOpenaiApiKeyChange={setOpenaiApiKey}
+            llmConfig={llmConfig}
+            onLLMConfigChange={setLLMConfig}
+            fileCount={fileCount}
+            totalChars={totalChars}
           />
 
           {/* Filter section */}

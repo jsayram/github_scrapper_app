@@ -5,7 +5,26 @@ import { Moon, Sun } from "lucide-react"
 import { useTheme } from "next-themes"
 
 export function ThemeToggle() {
+  const [mounted, setMounted] = React.useState(false)
   const { setTheme, theme } = useTheme()
+
+  // Only render on client to prevent hydration mismatch
+  React.useEffect(() => {
+    setMounted(true)
+  }, [])
+
+  // Render a placeholder with the same dimensions during SSR
+  if (!mounted) {
+    return (
+      <button
+        className="rounded-md p-2 bg-muted hover:bg-muted/80 inline-flex items-center justify-center h-9 w-9"
+        aria-label="Toggle theme"
+        disabled
+      >
+        <span className="h-5 w-5" />
+      </button>
+    )
+  }
 
   return (
     <button

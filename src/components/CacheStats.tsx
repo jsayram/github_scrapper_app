@@ -115,8 +115,8 @@ export function CacheStats() {
   }
 
   return (
-    <div className="p-4 border rounded-lg shadow-sm">
-      <h3 className="text-lg font-medium mb-4">LLM Cache Statistics</h3>
+    <div className="p-4 border rounded-lg shadow-sm max-h-[500px] overflow-y-auto scrollbar-thin scrollbar-thumb-gray-400 dark:scrollbar-thumb-gray-600 scrollbar-track-transparent">
+      <h3 className="text-lg font-medium mb-4 sticky top-0 bg-white dark:bg-gray-900 pb-2">LLM Cache Statistics</h3>
       
       <div className="grid grid-cols-2 gap-4 mb-4">
         <div className="p-3 bg-gray-50 rounded">
@@ -139,7 +139,7 @@ export function CacheStats() {
 
       <div className="mb-4">
         <h4 className="text-md font-medium mb-2">Cache Miss Reasons:</h4>
-        <ul className="text-sm">
+        <ul className="text-sm max-h-40 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-400 dark:scrollbar-thumb-gray-600 scrollbar-track-transparent">
           <li className="flex justify-between py-1">
             <span>Cache disabled:</span> 
             <span className="font-medium">{stats?.misses?.reasons?.cacheDisabled || 0}</span>

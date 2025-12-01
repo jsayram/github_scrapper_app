@@ -291,6 +291,30 @@ Contributions are welcome! Here's how to get started:
 - Enable caching to speed up subsequent runs
 - Consider using `gpt-3.5-turbo` instead of `gpt-4` for faster (but less detailed) results
 
+## 🔧 Recent Fixes & Improvements
+
+### Completed Fixes ✅
+
+| Issue | Description | Status |
+|-------|-------------|--------|
+| **Cache Stats API** | Created missing `/api/llm/cache-stats` endpoint for tracking LLM cache statistics | ✅ Fixed |
+| **FileBrowser Scrollbars** | Added horizontal and vertical scrollbars with custom styling | ✅ Fixed |
+| **FileExplorer Height** | Increased height from 400px to 500px and added scrollbar support | ✅ Fixed |
+| **FilterSection Overflow** | Added scrollable container for the large list of file type patterns | ✅ Fixed |
+| **CacheStats Scrolling** | Added scrollable container with sticky header for long statistics | ✅ Fixed |
+| **Global Scrollbar Styles** | Added custom scrollbar CSS utilities for light/dark themes | ✅ Fixed |
+
+### Known Limitations & Future Work 🚧
+
+| Area | Description | Priority |
+|------|-------------|----------|
+| **Rate Limiting** | Add retry logic with exponential backoff for GitHub API | Medium |
+| **Error Boundaries** | Implement React error boundaries for better error handling | Medium |
+| **Progress Indicators** | Add detailed progress tracking during tutorial generation | Low |
+| **Local Directory Support** | Full support for crawling local directories (partial implementation) | Low |
+| **Unit Tests** | Add comprehensive test coverage for core functionality | Medium |
+| **WebSocket Progress** | Real-time progress updates via WebSocket during generation | Low |
+
 ## 📄 License
 
 This project is open source and available under the [MIT License](LICENSE).

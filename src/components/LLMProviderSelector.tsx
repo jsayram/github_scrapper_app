@@ -1,0 +1,431 @@
+'use client';
+
+/**
+ * LLM Provider Selector Component
+ * Dropdown for selecting LLM provider and model with Ollama auto-detection
+ */
+
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  LLM_PROVIDERS,
+  DEFAULT_OLLAMA_MODELS,
+  getProvider,
+  type LLMProvider,
+  type LLMModel,
+} from '@/lib/providers';
+import { loadPreferences, savePreferences, setRememberChoice } from '@/lib/llmPreferences';
+import {
+  PROVIDER_IDS,
+  OPENAI_MODELS,
+} from '@/lib/constants/llm';
+
+interface LLMProviderSelectorProps {
+  onProviderChange: (providerId: string, modelId: string, apiKey?: string, baseUrl?: string) => void;
+  onTestConnection?: () => void;
+  disabled?: boolean;
+  className?: string;
+}
+
+interface OllamaStatus {
+  available: boolean;
+  models: LLMModel[];
+  loading: boolean;
+  error?: string;
+}
+
+export function LLMProviderSelector({
+  onProviderChange,
+  onTestConnection,
+  disabled = false,
+  className = '',
+}: LLMProviderSelectorProps) {
+  // State
+  const [selectedProvider, setSelectedProvider] = useState<string>(PROVIDER_IDS.OPENAI);
+  const [selectedModel, setSelectedModel] = useState<string>(OPENAI_MODELS.GPT_4O_MINI);
+  const [apiKey, setApiKey] = useState<string>('');
+  const [customBaseUrl, setCustomBaseUrl] = useState<string>('');
+  const [rememberChoice, setRememberChoiceState] = useState<boolean>(false);
+  const [ollamaStatus, setOllamaStatus] = useState<OllamaStatus>({
+    available: false,
+    models: [],
+    loading: true,
+  });
+  const [testingConnection, setTestingConnection] = useState<boolean>(false);
+  const [connectionStatus, setConnectionStatus] = useState<{
+    tested: boolean;
+    success: boolean;
+    message: string;
+    latencyMs?: number;
+  } | null>(null);
+  
+  // Get current provider and its models
+  const currentProvider = getProvider(selectedProvider);
+  const availableModels = selectedProvider === PROVIDER_IDS.OLLAMA && ollamaStatus.available
+    ? ollamaStatus.models
+    : currentProvider?.models || [];
+
+  // Load preferences on mount
+  useEffect(() => {
+    const prefs = loadPreferences();
+    if (prefs.rememberChoice) {
+      setSelectedProvider(prefs.providerId);
+      setSelectedModel(prefs.modelId);
+      setRememberChoiceState(true);
+      if (prefs.baseUrl) {
+        setCustomBaseUrl(prefs.baseUrl);
+      }
+    }
+  }, []);
+
+  // Check Ollama availability on mount
+  useEffect(() => {
+    checkOllamaStatus();
+  }, []);
+
+  // Notify parent of changes
+  useEffect(() => {
+    onProviderChange(
+      selectedProvider,
+      selectedModel,
+      apiKey || undefined,
+      customBaseUrl || undefined
+    );
+    
+    // Save preferences if opted in
+    if (rememberChoice) {
+      savePreferences({
+        providerId: selectedProvider,
+        modelId: selectedModel,
+        baseUrl: customBaseUrl || undefined,
+        rememberChoice: true,
+      });
+    }
+  }, [selectedProvider, selectedModel, apiKey, customBaseUrl, onProviderChange, rememberChoice]);
+
+  // Check Ollama status
+  const checkOllamaStatus = useCallback(async () => {
+    setOllamaStatus(prev => ({ ...prev, loading: true }));
+    
+    try {
+      const response = await fetch('/api/ollama-status');
+      const data = await response.json();
+      
+      if (data.available && data.models?.length > 0) {
+        setOllamaStatus({
+          available: true,
+          models: data.models,
+          loading: false,
+        });
+      } else {
+        setOllamaStatus({
+          available: false,
+          models: DEFAULT_OLLAMA_MODELS,
+          loading: false,
+          error: data.error || 'Ollama not running',
+        });
+      }
+    } catch (error) {
+      setOllamaStatus({
+        available: false,
+        models: DEFAULT_OLLAMA_MODELS,
+        loading: false,
+        error: 'Failed to check Ollama status',
+      });
+    }
+  }, []);
+
+  // Handle provider change
+  const handleProviderChange = (value: string) => {
+    setSelectedProvider(value);
+    setConnectionStatus(null);
+    
+    // Set default model for new provider
+    const provider = getProvider(value);
+    if (provider) {
+      const models = value === PROVIDER_IDS.OLLAMA && ollamaStatus.available
+        ? ollamaStatus.models
+        : provider.models;
+      
+      // Prefer recommended model, otherwise first model
+      const recommended = models.find(m => m.recommended);
+      setSelectedModel(recommended?.id || models[0]?.id || '');
+    }
+  };
+
+  // Handle model change
+  const handleModelChange = (value: string) => {
+    setSelectedModel(value);
+    setConnectionStatus(null);
+  };
+
+  // Test connection
+  const handleTestConnection = async () => {
+    setTestingConnection(true);
+    setConnectionStatus(null);
+    
+    try {
+      const response = await fetch('/api/llm-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: selectedProvider,
+          model: selectedModel,
+          apiKey: apiKey || undefined,
+          baseUrl: customBaseUrl || undefined,
+        }),
+      });
+      
+      const data = await response.json();
+      
+      setConnectionStatus({
+        tested: true,
+        success: data.success,
+        message: data.message,
+        latencyMs: data.latencyMs,
+      });
+    } catch (error) {
+      setConnectionStatus({
+        tested: true,
+        success: false,
+        message: 'Failed to test connection',
+      });
+    } finally {
+      setTestingConnection(false);
+    }
+    
+    if (onTestConnection) {
+      onTestConnection();
+    }
+  };
+
+  // Handle remember choice toggle
+  const handleRememberChoiceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const checked = e.target.checked;
+    setRememberChoiceState(checked);
+    setRememberChoice(checked);
+  };
+
+  // Check if current provider needs API key
+  const needsApiKey = currentProvider?.requiresApiKey ?? true;
+
+  return (
+    <div className={`space-y-4 ${className}`}>
+      {/* Provider Selection */}
+      <div className="space-y-2">
+        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          LLM Provider
+        </label>
+        <Select
+          value={selectedProvider}
+          onValueChange={handleProviderChange}
+          disabled={disabled}
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder="Select a provider" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectLabel className="text-xs text-gray-500 dark:text-gray-400 font-semibold px-2 py-1.5">
+                Cloud Providers
+              </SelectLabel>
+              {LLM_PROVIDERS.filter(p => !p.isLocal).map(provider => (
+                <SelectItem key={provider.id} value={provider.id}>
+                  {provider.name} {provider.recommended ? '⭐' : ''}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+            <SelectGroup>
+              <SelectLabel className="text-xs text-gray-500 dark:text-gray-400 font-semibold px-2 py-1.5">
+                Local (Free)
+              </SelectLabel>
+              {LLM_PROVIDERS.filter(p => p.isLocal).map(provider => (
+                <SelectItem key={provider.id} value={provider.id}>
+                  {provider.name} {ollamaStatus.available ? '✓' : '⚠️'} 🆓
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-gray-500 dark:text-gray-400">
+          {currentProvider?.description}
+        </p>
+      </div>
+
+      {/* Model Selection */}
+      <div className="space-y-2">
+        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          Model
+        </label>
+        <Select
+          value={selectedModel}
+          onValueChange={handleModelChange}
+          disabled={disabled || availableModels.length === 0}
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder="Select a model" />
+          </SelectTrigger>
+          <SelectContent>
+            {availableModels.map(model => (
+              <SelectItem key={model.id} value={model.id}>
+                {model.name} {model.recommended ? '⭐' : ''} {model.costPer1kInput === 0 ? '🆓' : ''}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {selectedModel && (
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            {availableModels.find(m => m.id === selectedModel)?.description}
+          </p>
+        )}
+      </div>
+
+      {/* API Key Input (if needed) */}
+      {needsApiKey && (
+        <div className="space-y-2">
+          <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+            API Key
+            <span className="text-gray-400 font-normal ml-1">(optional if set in .env)</span>
+          </label>
+          <input
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={`Enter ${currentProvider?.name || 'API'} key...`}
+            disabled={disabled}
+            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md 
+                       bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100
+                       focus:ring-2 focus:ring-blue-500 focus:border-blue-500
+                       disabled:opacity-50 disabled:cursor-not-allowed"
+          />
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Or set <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">
+              {currentProvider?.envVarNames?.[0] || 'API_KEY'}
+            </code> in your .env.local file
+          </p>
+        </div>
+      )}
+
+      {/* Custom Base URL (for Ollama or custom endpoints) */}
+      {(selectedProvider === PROVIDER_IDS.OLLAMA || selectedProvider === PROVIDER_IDS.AZURE) && (
+        <div className="space-y-2">
+          <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+            Base URL
+            <span className="text-gray-400 font-normal ml-1">(optional)</span>
+          </label>
+          <input
+            type="text"
+            value={customBaseUrl}
+            onChange={(e) => setCustomBaseUrl(e.target.value)}
+            placeholder={selectedProvider === PROVIDER_IDS.OLLAMA 
+              ? 'http://localhost:11434/v1' 
+              : 'https://your-resource.openai.azure.com'}
+            disabled={disabled}
+            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md 
+                       bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100
+                       focus:ring-2 focus:ring-blue-500 focus:border-blue-500
+                       disabled:opacity-50 disabled:cursor-not-allowed"
+          />
+        </div>
+      )}
+
+      {/* Remember Choice */}
+      <div className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          id="rememberChoice"
+          checked={rememberChoice}
+          onChange={handleRememberChoiceChange}
+          disabled={disabled}
+          className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+        />
+        <label 
+          htmlFor="rememberChoice" 
+          className="text-sm text-gray-700 dark:text-gray-300 cursor-pointer"
+        >
+          Remember my choice
+        </label>
+        <span className="text-xs text-gray-400">(API keys are never stored)</span>
+      </div>
+
+      {/* Test Connection Button */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={handleTestConnection}
+          disabled={disabled || testingConnection}
+          className="px-4 py-2 text-sm font-medium text-white bg-gray-600 hover:bg-gray-700 
+                     dark:bg-gray-500 dark:hover:bg-gray-600 rounded-md
+                     disabled:opacity-50 disabled:cursor-not-allowed
+                     transition-colors flex items-center gap-2"
+        >
+          {testingConnection ? (
+            <>
+              <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              Testing...
+            </>
+          ) : (
+            'Test Connection'
+          )}
+        </button>
+        
+        {connectionStatus && (
+          <div className={`text-sm flex items-center gap-1 ${
+            connectionStatus.success 
+              ? 'text-green-600 dark:text-green-400' 
+              : 'text-red-600 dark:text-red-400'
+          }`}>
+            {connectionStatus.success ? (
+              <>
+                <span>✓</span>
+                <span>{connectionStatus.message}</span>
+                {connectionStatus.latencyMs && (
+                  <span className="text-gray-400">({connectionStatus.latencyMs}ms)</span>
+                )}
+              </>
+            ) : (
+              <>
+                <span>✗</span>
+                <span>{connectionStatus.message}</span>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Ollama Help */}
+      {selectedProvider === PROVIDER_IDS.OLLAMA && !ollamaStatus.available && (
+        <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md">
+          <p className="text-sm text-yellow-800 dark:text-yellow-200">
+            <strong>Ollama not detected.</strong> To use local models:
+          </p>
+          <ol className="mt-2 text-xs text-yellow-700 dark:text-yellow-300 list-decimal list-inside space-y-1">
+            <li>Install Ollama from <a href="https://ollama.ai" target="_blank" rel="noopener noreferrer" className="underline">ollama.ai</a></li>
+            <li>Run <code className="bg-yellow-100 dark:bg-yellow-800 px-1 rounded">ollama serve</code> in terminal</li>
+            <li>Pull a model: <code className="bg-yellow-100 dark:bg-yellow-800 px-1 rounded">ollama pull llama3.2</code></li>
+            <li>Click "Test Connection" above</li>
+          </ol>
+          <button
+            onClick={checkOllamaStatus}
+            disabled={ollamaStatus.loading}
+            className="mt-2 text-xs text-yellow-700 dark:text-yellow-300 underline hover:no-underline"
+          >
+            {ollamaStatus.loading ? 'Checking...' : 'Retry detection'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default LLMProviderSelector;

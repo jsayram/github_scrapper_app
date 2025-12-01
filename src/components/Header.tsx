@@ -1,4 +1,5 @@
 import Image from "next/image";
+import Link from "next/link";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { VersionInfo } from "./SaveToFile";
 
@@ -10,7 +11,19 @@ interface HeaderProps {
 const Header: React.FC<HeaderProps> = ({ activeVersion, onClearVersion }) => {
   return (
     <header className="mb-6 flex flex-col items-center relative">
-      <div className="absolute right-0 top-0">
+      <div className="absolute right-0 top-0 flex items-center gap-2">
+        <Link 
+          href="/llm-test"
+          className="px-3 py-1.5 text-sm bg-gradient-to-r from-purple-500 to-blue-500 text-white rounded-md hover:from-purple-600 hover:to-blue-600 transition-all shadow-sm"
+        >
+          🧪 Test LLM
+        </Link>
+        <Link 
+          href="/cache-stats"
+          className="px-3 py-1.5 text-sm bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-md hover:bg-gray-200 dark:hover:bg-gray-700 transition-all"
+        >
+          📊 Cache
+        </Link>
         <ThemeToggle />
       </div>
       <Image

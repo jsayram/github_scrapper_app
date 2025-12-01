@@ -70,7 +70,8 @@ export async function runTutorialFlow(shared: any): Promise<any> {
   console.log(`[TutorialFlow] Creating tutorial flow instance`);
   
   // Check if we should skip the fetch repo step
-  const skipFetchRepo = shared.skip_fetch_repo === false;
+  // skip_fetch_repo is true when files are already provided
+  const skipFetchRepo = shared.skip_fetch_repo === true;
   
   if (skipFetchRepo) {
     console.log(`[TutorialFlow] Skipping FetchRepo step as files are already provided`);
@@ -79,7 +80,7 @@ export async function runTutorialFlow(shared: any): Promise<any> {
   // Create the flow instance with the appropriate configuration
   const flow = createTutorialFlow(skipFetchRepo);
   
-  console.log(`[TutorialFlow] Running flow with ${shared.files.length} files`);
+  console.log(`[TutorialFlow] Running flow with ${shared.files?.length || 0} files`);
   console.log(`[TutorialFlow] Project: ${shared.project_name}`);
   
   try {

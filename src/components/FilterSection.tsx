@@ -36,13 +36,13 @@ const FilterSection: React.FC<FilterSectionProps> = ({
       </div>
 
       {showFilters && (
-        <div className="mb-6 border rounded-md p-4">
+        <div className="mb-6 border rounded-md p-4 max-h-[500px] overflow-y-auto scrollbar-thin scrollbar-thumb-gray-400 dark:scrollbar-thumb-gray-600 scrollbar-track-transparent">
           <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium mb-1">
+              <label className="block text-sm font-medium mb-1 sticky top-0 bg-white dark:bg-gray-900 py-1">
                 Include File Types
               </label>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-[300px] overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-700 scrollbar-track-transparent pr-2">
                 {[
                   { label: "Python", pattern: "*.py" },
                   { label: "JavaScript", pattern: "*.js" },

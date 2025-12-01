@@ -1,36 +1,34 @@
 import { NextResponse } from "next/server";
-import { callLLM, getApiKey } from "@/lib/llm";
+import { callLLMWithMetadata } from "@/lib/llmMultiProvider";
+import { PROVIDER_IDS } from "@/lib/constants/llm";
 
 export async function POST(request: Request) {
   try {
-    // Make sure we have an API key before proceeding
-    try {
-      getApiKey();
-    } catch (error) {
-      return NextResponse.json(
-        { error: "OpenAI API key not configured. Please add it to your .env file." }, 
-        { status: 500 }
-      );
-    }
-    
     // Extract parameters from request
-    const { prompt, model, temperature, maxTokens, useCache } = await request.json();
+    const { prompt, provider, model, temperature, maxTokens, useCache, customApiKey } = await request.json();
     
     if (!prompt) {
       return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
     }
     
-    // Call the LLM service
-    const result = await callLLM({ 
+    // Use the multi-provider LLM service with metadata
+    const result = await callLLMWithMetadata({ 
       prompt, 
+      provider: provider || PROVIDER_IDS.OPENAI, // Default to OpenAI
       model, 
       temperature, 
       maxTokens, 
-      useCache 
+      useCache,
+      customApiKey
     });
     
-    // Return the result
-    return NextResponse.json({ result });
+    // Return the result with metadata
+    return NextResponse.json({ 
+      result: result.content,
+      cached: result.cached,
+      usage: result.usage,
+      cost: result.cost
+    });
     
   } catch (error) {
     console.error("LLM API error:", error);

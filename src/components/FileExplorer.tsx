@@ -17,7 +17,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
 }) => {
   return (
     <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-      <div className="md:col-span-1 h-[400px] overflow-hidden border rounded-md">
+      <div className="md:col-span-1 h-[500px] overflow-auto border rounded-md scrollbar-thin scrollbar-thumb-gray-400 dark:scrollbar-thumb-gray-600 scrollbar-track-transparent">
         <FileBrowser
           files={files}
           onFileSelect={onFileSelect}

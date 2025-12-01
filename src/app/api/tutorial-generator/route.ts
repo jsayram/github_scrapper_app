@@ -2,11 +2,12 @@ import { NextResponse } from 'next/server';
 import path from 'path';
 import fs from 'fs/promises';
 import { runTutorialFlow } from '@/lib/tutorialFlow';
+import { PROVIDER_IDS } from '@/lib/constants/llm';
 
 export async function POST(request: Request) {
   try {
     const payload = await request.json();
-    console.log(`[TutorialAPI] Received payload: ${JSON.stringify(payload)}`);
+    console.log(`[TutorialAPI] Received payload keys: ${Object.keys(payload).join(', ')}`);
     
     // Extract all required fields from the request
     const {
@@ -19,11 +20,18 @@ export async function POST(request: Request) {
       use_cache = true,
       max_abstraction_num = 5,
       max_file_size = 1000000, // Default to 1MB if not provided
-      use_mock = false
+      use_mock = false,
+      openai_api_key, // Legacy: Custom API key from frontend
+      // New multi-provider LLM configuration
+      llm_provider = PROVIDER_IDS.OPENAI,
+      llm_model,
+      llm_api_key,
+      llm_base_url,
     } = payload;
 
     console.log(`[TutorialAPI] Received request for ${repo_url}, mock mode: ${use_mock}`);
-
+    console.log(`[TutorialAPI] LLM Provider: ${llm_provider}, Model: ${llm_model || 'default'}`);
+    console.log(`[TutorialAPI] Using custom API key: ${llm_api_key || openai_api_key ? 'Yes' : 'No (using env)'}`);
     // Validate repository URL
     if (!repo_url) {
       return NextResponse.json({ error: "Repository URL is required" }, { status: 400 });
@@ -63,7 +71,14 @@ export async function POST(request: Request) {
       max_abstraction_num,
       max_file_size,
       // Skip the fetch repo step since we already have files
-      skip_fetch_repo: true
+      skip_fetch_repo: true,
+      // Legacy: Pass custom API key if provided (will override env variable)
+      openai_api_key: llm_api_key || openai_api_key,
+      // New multi-provider LLM configuration
+      llm_provider,
+      llm_model,
+      llm_api_key: llm_api_key || openai_api_key,
+      llm_base_url,
     };
     const OUTPUT_DIRECTORY = process.env.OUTPUT_DIRECTORY || 'output';
     console.log(`[TutorialAPI] Running tutorial flow with ${processedFiles.length} files`);

@@ -15,8 +15,9 @@ import { Node, BatchNode } from "pocketflow"; // Assuming pocketflow types are a
 // Assuming these utility functions exist and are async
 import { githubFileCrawler } from "@/lib/githubFileCrawler"; // Assuming this is the correct import path
 // import { crawlLocalFiles } from "@/utils/crawl_local_files";
-import { callLLM } from "@/lib/llm"; // Assuming this is the correct import path
+import { callLLM } from "@/lib/llmMultiProvider"; // Updated to use multi-provider LLM
 import { CrawlerResult } from "@/lib/githubFileCrawler"; // Assuming this is the correct import path
+import { PROVIDER_IDS } from "@/lib/constants/llm";
 
 // Define types for shared data for better type safety
 interface SharedData {
@@ -37,6 +38,20 @@ interface SharedData {
   chapters?: string[]; // Array of Markdown chapter content
   output_dir?: string;
   final_output_dir?: string;
+  openai_api_key?: string; // Legacy: Custom API key from frontend
+  
+  // Multi-provider LLM configuration
+  llm_provider?: string;  // Provider ID (openai, anthropic, google, groq, etc.)
+  llm_model?: string;     // Model ID
+  llm_api_key?: string;   // API key for the provider
+  llm_base_url?: string;  // Custom base URL (for Ollama, Azure, etc.)
+  
+  // Partial regeneration support
+  regeneration_mode?: 'full' | 'partial' | 'partial_reidentify' | 'skip';
+  chapters_to_regenerate?: string[];  // Chapter slugs to regenerate
+  cached_chapters?: Record<string, string>;  // slug -> cached content
+  cached_abstractions?: Abstraction[];
+  cached_relationships?: RelationshipData;
 }
 
 interface Abstraction {
@@ -212,6 +227,10 @@ export class IdentifyAbstractions extends Node<SharedData> {
     const language = shared.language ?? "english";
     const useCache = shared.use_cache ?? true;
     const maxAbs = shared.max_abstraction_num ?? 10;
+    const customApiKey = shared.llm_api_key || shared.openai_api_key; // Get custom API key (prefer new, fallback to legacy)
+    const llmProvider = shared.llm_provider || PROVIDER_IDS.OPENAI;
+    const llmModel = shared.llm_model;
+    const llmBaseUrl = shared.llm_base_url;
 
     if (!filesData || filesData.length === 0) {
       throw new Error(
@@ -244,6 +263,10 @@ export class IdentifyAbstractions extends Node<SharedData> {
       language,
       useCache,
       maxAbs,
+      customApiKey,
+      llmProvider,
+      llmModel,
+      llmBaseUrl,
     } as const;
   }
 
@@ -256,6 +279,10 @@ export class IdentifyAbstractions extends Node<SharedData> {
       language,
       useCache,
       maxAbs,
+      customApiKey,
+      llmProvider,
+      llmModel,
+      llmBaseUrl,
     } = await prepRes;
     console.log("Identifying abstractions using LLM...");
 
@@ -308,10 +335,14 @@ Format the output as a YAML list of dictionaries:
 # ... up to ${maxAbs} abstractions
 \`\`\``;
 
-    // Call the LLM with cache context
+    // Call the LLM with cache context and custom API key
     const response = await callLLM({ 
       prompt, 
-      useCache
+      useCache,
+      customApiKey,
+      provider: llmProvider,
+      model: llmModel,
+      customBaseUrl: llmBaseUrl,
     });
 
     // Extract YAML block from the response
@@ -424,6 +455,10 @@ export class AnalyzeRelationships extends Node<SharedData> {
     const projectName = shared.project_name;
     const language = shared.language ?? "english";
     const useCache = shared.use_cache ?? true;
+    const customApiKey = shared.llm_api_key || shared.openai_api_key;
+    const llmProvider = shared.llm_provider || PROVIDER_IDS.OPENAI;
+    const llmModel = shared.llm_model;
+    const llmBaseUrl = shared.llm_base_url;
 
     if (!abstractions || abstractions.length === 0) {
       throw new Error(
@@ -469,6 +504,10 @@ export class AnalyzeRelationships extends Node<SharedData> {
       projectName,
       language,
       useCache,
+      customApiKey,
+      llmProvider,
+      llmModel,
+      llmBaseUrl,
     } as const;
   }
 
@@ -480,6 +519,10 @@ export class AnalyzeRelationships extends Node<SharedData> {
       projectName,
       language,
       useCache,
+      customApiKey,
+      llmProvider,
+      llmModel,
+      llmBaseUrl,
     } = await prepRes;
     console.log("Analyzing relationships using LLM...");
 
@@ -534,10 +577,14 @@ relationships:
 Now, provide the YAML output:
 \`\`\``;
 
-    // Call the LLM with cache context
+    // Call the LLM with cache context and custom API key
     const response = await callLLM({ 
       prompt, 
       useCache,
+      customApiKey,
+      provider: llmProvider,
+      model: llmModel,
+      customBaseUrl: llmBaseUrl,
     });
 
     // Extract YAML block
@@ -672,6 +719,10 @@ export class OrderChapters extends Node<SharedData> {
     const projectName = shared.project_name;
     const language = shared.language ?? "english";
     const useCache = shared.use_cache ?? true;
+    const customApiKey = shared.llm_api_key || shared.openai_api_key;
+    const llmProvider = shared.llm_provider || PROVIDER_IDS.OPENAI;
+    const llmModel = shared.llm_model;
+    const llmBaseUrl = shared.llm_base_url;
 
     if (!abstractions || abstractions.length === 0) {
       throw new Error(
@@ -735,6 +786,10 @@ export class OrderChapters extends Node<SharedData> {
       projectName,
       listLangNote,
       useCache,
+      customApiKey,
+      llmProvider,
+      llmModel,
+      llmBaseUrl,
     } as const;
   }
 
@@ -746,6 +801,10 @@ export class OrderChapters extends Node<SharedData> {
       projectName,
       listLangNote,
       useCache,
+      customApiKey,
+      llmProvider,
+      llmModel,
+      llmBaseUrl,
     } = await prepRes;
     console.log("Determining chapter order using LLM...");
 
@@ -774,10 +833,14 @@ Output the ordered list of abstraction indices, including the name in a comment 
 Now, provide the YAML output:`;
 
 
-    // Call the LLM with cache context
+    // Call the LLM with cache context and custom API key
     const response = await callLLM({ 
       prompt, 
       useCache,
+      customApiKey,
+      provider: llmProvider,
+      model: llmModel,
+      customBaseUrl: llmBaseUrl,
     });
 
     // Extract YAML block
@@ -891,6 +954,10 @@ interface WriteChapterItem {
   nextChapter: ChapterFilenameInfo | null; // Uses potentially translated name
   language: string;
   useCache: boolean;
+  customApiKey?: string;
+  llmProvider?: string;
+  llmModel?: string;
+  llmBaseUrl?: string;
   [key: string]: unknown; // Add index signature to satisfy NonIterableObject constraint
 }
 
@@ -905,6 +972,10 @@ export class WriteChapters extends BatchNode<SharedData, WriteChapterItem> {
     const projectName = shared.project_name;
     const language = shared.language ?? "english";
     const useCache = shared.use_cache ?? true;
+    const customApiKey = shared.llm_api_key || shared.openai_api_key;
+    const llmProvider = shared.llm_provider || PROVIDER_IDS.OPENAI;
+    const llmModel = shared.llm_model;
+    const llmBaseUrl = shared.llm_base_url;
 
     if (!chapterOrder)
       throw new Error("Chapter order not found in shared state.");
@@ -979,6 +1050,10 @@ export class WriteChapters extends BatchNode<SharedData, WriteChapterItem> {
         nextChapter: nextChapter,
         language: language,
         useCache: useCache,
+        customApiKey: customApiKey,
+        llmProvider: llmProvider,
+        llmModel: llmModel,
+        llmBaseUrl: llmBaseUrl,
       });
     });
 
@@ -999,6 +1074,10 @@ export class WriteChapters extends BatchNode<SharedData, WriteChapterItem> {
       nextChapter,
       language,
       useCache,
+      customApiKey,
+      llmProvider,
+      llmModel,
+      llmBaseUrl,
     } = item;
 
     const abstractionName = abstractionDetails.name; // Potentially translated
@@ -1093,8 +1172,15 @@ ${
 
 Now, directly provide a super beginner-friendly Markdown output (DON'T need \`\`\`markdown\`\`\` tags):`;
 
-    // Call the LLM (assuming async)
-    let chapterContent = await callLLM({prompt});
+    // Call the LLM with custom API key
+    let chapterContent = await callLLM({
+      prompt,
+      useCache,
+      customApiKey,
+      provider: llmProvider,
+      model: llmModel,
+      customBaseUrl: llmBaseUrl,
+    });
 
     // --- Basic Validation/Cleanup ---
     // Ensure the heading is present and correct

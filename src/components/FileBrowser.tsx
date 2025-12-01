@@ -169,8 +169,8 @@ export default function FileBrowser({ files, onFileSelect, selectedFile }: FileB
         />
       </div>
       
-      <div className="flex-1 overflow-y-auto p-1">
-        <div className="text-sm">
+      <div className="flex-1 overflow-y-auto overflow-x-auto p-1 scrollbar-thin scrollbar-thumb-gray-400 dark:scrollbar-thumb-gray-600 scrollbar-track-transparent hover:scrollbar-thumb-gray-500 dark:hover:scrollbar-thumb-gray-500">
+        <div className="text-sm min-w-max">
           {Object.values(filteredFileTree.children).map(node => renderNode(node))}
         </div>
       </div>

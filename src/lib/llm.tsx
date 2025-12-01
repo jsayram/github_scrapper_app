@@ -30,8 +30,14 @@ async function log(message: string): Promise<void> {
 
 /**
  * Ensures an OpenAI API key is available
+ * @param customKey Optional custom API key to use instead of environment variable
  */
-export function getApiKey(): string {
+export function getApiKey(customKey?: string): string {
+  // If a custom key is provided, use it
+  if (customKey && customKey.trim()) {
+    return customKey.trim();
+  }
+  
   const candidates = [
     'OPENAI_API_KEY',
     'OPEN_AI_API_KEY', 
@@ -46,7 +52,7 @@ export function getApiKey(): string {
     }
   }
 
-  throw new Error('No OpenAI API key found in environment variables');
+  throw new Error('No OpenAI API key found. Please provide an API key in the UI or set OPENAI_API_KEY in your .env.local file.');
 }
 
 export interface CallLLMOptions {
@@ -56,6 +62,7 @@ export interface CallLLMOptions {
   maxTokens?: number;
   useCache?: boolean;
   onCacheStatus?: (hit: boolean) => void;
+  customApiKey?: string; // Custom API key from frontend
 }
 
 /**
@@ -68,6 +75,7 @@ export async function callLLM({
   temperature = 0.2,
   maxTokens = 4096,
   useCache = true,
+  customApiKey,
   onCacheStatus
 }: CallLLMOptions): Promise<string> {
   // Log the prompt
@@ -101,9 +109,16 @@ export async function callLLM({
   }
 
   try {
-    // Initialize OpenAI client
-    const apiKey = getApiKey();
+    // Initialize OpenAI client with custom or environment API key
+    const apiKey = getApiKey(customApiKey);
+    
+    if (!apiKey || apiKey.trim() === '') {
+      throw new Error('OpenAI API key is not configured. Please provide an API key in the UI or set OPENAI_API_KEY in your .env.local file.');
+    }
+    
     const client = new OpenAI({ apiKey });
+    
+    console.log(`[LLM] Calling OpenAI API with model: ${model}, using ${customApiKey ? 'custom' : 'environment'} API key`);
     
     // Call OpenAI API
     const response = await client.chat.completions.create({
@@ -114,6 +129,12 @@ export async function callLLM({
     });
     
     const result = response.choices[0]?.message?.content || '';
+    
+    if (!result) {
+      throw new Error('OpenAI API returned an empty response');
+    }
+    
+    console.log(`[LLM] Received response (${result.length} chars)`);
     
     // Update cache if enabled
     if (useCache) {
@@ -147,8 +168,20 @@ export async function callLLM({
     if (onCacheStatus) onCacheStatus(false);
     return result;
     
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error calling OpenAI API:', error);
+    
+    // Provide more helpful error messages
+    if (error.code === 'invalid_api_key') {
+      throw new Error('Invalid OpenAI API key. Please check your OPENAI_API_KEY in .env.local');
+    } else if (error.code === 'insufficient_quota') {
+      throw new Error('OpenAI API quota exceeded. Please check your billing at platform.openai.com');
+    } else if (error.status === 429) {
+      throw new Error('OpenAI API rate limit exceeded. Please wait and try again.');
+    } else if (error.message?.includes('<!DOCTYPE')) {
+      throw new Error('Received HTML instead of JSON from API. This usually means the API endpoint is not reachable.');
+    }
+    
     throw error;
   }
 }
