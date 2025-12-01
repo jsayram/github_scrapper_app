@@ -35,7 +35,8 @@ export async function POST(request: Request) {
     console.log(`[TutorialAPI] Received request for ${repo_url}, mock mode: ${use_mock}`);
     console.log(`[TutorialAPI] LLM Provider: ${llm_provider}, Model: ${llm_model || 'default'}`);
     console.log(`[TutorialAPI] Regeneration mode: ${regeneration_mode || 'auto'}, Force full: ${force_full_regeneration}`);
-    console.log(`[TutorialAPI] Using custom API key: ${llm_api_key || openai_api_key ? 'Yes' : 'No (using env)'}`);
+    console.log(`[TutorialAPI] Using custom API key: ${llm_api_key || openai_api_key ? 'Yes (length: ' + (llm_api_key || openai_api_key).length + ')' : 'No (using env)'}`);
+    console.log(`[TutorialAPI] Custom base URL: ${llm_base_url || 'none'}`);
     // Validate repository URL
     if (!repo_url) {
       return NextResponse.json({ error: "Repository URL is required" }, { status: 400 });

@@ -139,10 +139,11 @@ export function CostEstimator({
 
       {/* Token Breakdown Toggle */}
       <button
+        type="button"
         onClick={() => setShowBreakdown(!showBreakdown)}
         className="mt-3 text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
       >
-        {showBreakdown ? '▼' : '▶'} Show breakdown
+        {showBreakdown ? '▼' : '▶'} {showBreakdown ? 'Hide' : 'Show'} breakdown
       </button>
 
       {/* Token Breakdown */}

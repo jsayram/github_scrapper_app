@@ -301,6 +301,13 @@ export default function Home() {
       console.log(`[TutorialGen] Using ${filesArray.length} files for tutorial generation`);
       console.log(`[TutorialGen] Repository URL: ${repoUrl}`);
       console.log(`[TutorialGen] Regeneration mode: ${llmConfig.regenerationMode || 'auto'}`);
+      console.log(`[TutorialGen] LLM Config:`, {
+        providerId: llmConfig.providerId,
+        modelId: llmConfig.modelId,
+        hasApiKey: !!llmConfig.apiKey,
+        hasBaseUrl: !!llmConfig.baseUrl,
+        hasLegacyApiKey: !!openaiApiKey,
+      });
 
       // Prepare payload for API request
       const payload = {
