@@ -74,7 +74,8 @@ export function LLMProviderSelector({
   const [customModelName, setCustomModelName] = useState<string>('');
   
   // Get current provider and its models
-  const currentProvider = useCustomProvider ? null : getProvider(selectedProvider);
+  // Always get provider info from selectedProvider for model dropdown (even when using custom provider name)
+  const currentProvider = getProvider(selectedProvider);
   const availableModels = selectedProvider === PROVIDER_IDS.OLLAMA && ollamaStatus.available
     ? ollamaStatus.models
     : currentProvider?.models || [];

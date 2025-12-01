@@ -86,16 +86,18 @@ export const LLM_PROVIDERS: LLMProvider[] = [
   {
     id: PROVIDER_IDS.OPENAI,
     name: PROVIDER_NAMES[PROVIDER_IDS.OPENAI],
-    description: 'GPT-5, GPT-4.1, GPT-4o, o4-mini models',
+    description: 'GPT-5, GPT-4.1, GPT-4o, o3/o4-mini models',
     requiresApiKey: true,
     envVarNames: [ENV_KEYS.OPENAI_API_KEY, 'OPENAI_KEY', 'OPEN_AI_API_KEY'],
     recommended: true,
     models: [
       // GPT-5 Series
-      createModel(PROVIDER_IDS.OPENAI, OPENAI_MODELS.GPT_5_1, 'Flagship coding & agentic ⭐'),
+      createModel(PROVIDER_IDS.OPENAI, OPENAI_MODELS.GPT_5_1, 'Flagship model ⭐'),
+      createModel(PROVIDER_IDS.OPENAI, OPENAI_MODELS.GPT_5, 'Latest GPT-5'),
       createModel(PROVIDER_IDS.OPENAI, OPENAI_MODELS.GPT_5_MINI, 'Fast, affordable GPT-5'),
-      createModel(PROVIDER_IDS.OPENAI, OPENAI_MODELS.GPT_5_NANO, 'Ultra-cheap, fast'),
-      createModel(PROVIDER_IDS.OPENAI, OPENAI_MODELS.GPT_5_PRO, 'Smartest, most precise'),
+      // GPT-5 Codex Series
+      createModel(PROVIDER_IDS.OPENAI, OPENAI_MODELS.GPT_5_1_CODEX, 'Best for code generation'),
+      createModel(PROVIDER_IDS.OPENAI, OPENAI_MODELS.GPT_5_CODEX, 'Code generation'),
       // GPT-4.1 Series
       createModel(PROVIDER_IDS.OPENAI, OPENAI_MODELS.GPT_4_1, 'Fine-tunable'),
       createModel(PROVIDER_IDS.OPENAI, OPENAI_MODELS.GPT_4_1_MINI, 'Fast fine-tunable'),
@@ -104,6 +106,7 @@ export const LLM_PROVIDERS: LLMProvider[] = [
       createModel(PROVIDER_IDS.OPENAI, OPENAI_MODELS.GPT_4O, 'Multimodal, reliable'),
       createModel(PROVIDER_IDS.OPENAI, OPENAI_MODELS.GPT_4O_MINI, 'Fast and affordable'),
       // Reasoning
+      createModel(PROVIDER_IDS.OPENAI, OPENAI_MODELS.O3, 'Advanced reasoning ⭐'),
       createModel(PROVIDER_IDS.OPENAI, OPENAI_MODELS.O4_MINI, 'Latest reasoning'),
       createModel(PROVIDER_IDS.OPENAI, OPENAI_MODELS.O3_MINI, 'Reasoning model'),
       createModel(PROVIDER_IDS.OPENAI, OPENAI_MODELS.O1, 'Advanced reasoning'),
