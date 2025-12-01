@@ -5,7 +5,7 @@ import { PROVIDER_IDS } from "@/lib/constants/llm";
 export async function POST(request: Request) {
   try {
     // Extract parameters from request
-    const { prompt, provider, model, temperature, maxTokens, useCache, customApiKey } = await request.json();
+    const { prompt, provider, model, temperature, maxTokens, useCache, customApiKey, customBaseUrl } = await request.json();
     
     if (!prompt) {
       return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
@@ -19,7 +19,8 @@ export async function POST(request: Request) {
       temperature, 
       maxTokens, 
       useCache,
-      customApiKey
+      customApiKey,
+      customBaseUrl
     });
     
     // Return the result with metadata

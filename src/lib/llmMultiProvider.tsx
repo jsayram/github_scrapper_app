@@ -334,10 +334,33 @@ async function callOpenAICompatible(
     requestParams.max_tokens = maxTokens;
   }
   
+  log.debug('OpenAI request', { model, baseUrl, isNewerOpenAIModel, isReasoningModel, params: JSON.stringify(requestParams) });
+  
   const response = await client.chat.completions.create(requestParams);
   
+  log.debug('OpenAI response', { 
+    choices: response.choices?.length,
+    finishReason: response.choices?.[0]?.finish_reason,
+    hasContent: !!response.choices?.[0]?.message?.content,
+    contentLength: response.choices?.[0]?.message?.content?.length || 0
+  });
+  
+  const content = response.choices[0]?.message?.content;
+  
+  // Better error handling for empty responses
+  if (!content && content !== '') {
+    const finishReason = response.choices?.[0]?.finish_reason;
+    if (finishReason === 'content_filter') {
+      throw new Error('Response was filtered by content moderation');
+    } else if (finishReason === 'length') {
+      throw new Error('Response was truncated due to max tokens limit');
+    } else if (!response.choices || response.choices.length === 0) {
+      throw new Error(`No choices returned from API. Model "${model}" may not exist or be available.`);
+    }
+  }
+  
   return {
-    content: response.choices[0]?.message?.content || '',
+    content: content || '',
     usage: {
       inputTokens: response.usage?.prompt_tokens || 0,
       outputTokens: response.usage?.completion_tokens || 0
@@ -487,7 +510,7 @@ export async function callLLM({
     }
     
     if (!result.content) {
-      throw new Error(`${providerId} API returned an empty response`);
+      throw new Error(`${providerId} API returned an empty response for model "${actualModelId}". The model may not exist or may require different parameters.`);
     }
     
     log.info('LLM response received', { 
@@ -652,6 +675,13 @@ export async function testProviderConnection(config: ProviderConfig): Promise<{
 }> {
   const start = Date.now();
   
+  log.info('Testing provider connection', { 
+    providerId: config.providerId, 
+    modelId: config.modelId,
+    hasApiKey: !!config.apiKey,
+    hasBaseUrl: !!config.baseUrl
+  });
+  
   try {
     const result = await callLLM({
       prompt: 'Say "OK" and nothing else.',
@@ -660,11 +690,18 @@ export async function testProviderConnection(config: ProviderConfig): Promise<{
       customApiKey: config.apiKey,
       customBaseUrl: config.baseUrl,
       useCache: false,
-      maxTokens: 10,
+      maxTokens: 50, // Increased from 10 for models that may need more tokens
       temperature: 0
     });
     
     const latencyMs = Date.now() - start;
+    
+    log.info('Test connection result', { 
+      providerId: config.providerId, 
+      modelId: config.modelId,
+      result: result.substring(0, 100),
+      latencyMs
+    });
     
     if (result.toLowerCase().includes('ok')) {
       return {
@@ -681,6 +718,11 @@ export async function testProviderConnection(config: ProviderConfig): Promise<{
     }
   } catch (error: unknown) {
     const err = error as Error;
+    log.error('Test connection failed', { 
+      providerId: config.providerId, 
+      modelId: config.modelId,
+      error: err.message 
+    });
     return {
       success: false,
       message: err.message || 'Unknown error'
