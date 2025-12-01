@@ -20,7 +20,7 @@ import RepositoryForm, { LLMConfig } from "@/components/RepositoryForm";
 import FilterSection from "@/components/FilterSection";
 import ActionButtons from "@/components/ActionButtons";
 import ErrorMessage from "@/components/ErrorMessage";
-import LoadingIndicator from "@/components/LoadingIndicator";
+import LoadingIndicator, { TutorialProgress } from "@/components/LoadingIndicator";
 import StatsDisplay from "@/components/StatsDisplay";
 import FileExplorer from "@/components/FileExplorer";
 import {
@@ -48,6 +48,7 @@ export default function Home() {
   const [stats, setStats] = useState<FileStats | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isProcessingTutorial, setIsProcessingTutorial] = useState(false);
+  const [tutorialProgress, setTutorialProgress] = useState<TutorialProgress | null>(null);
   const [error, setError] = useState("");
   const [selectedFile, setSelectedFile] = useState("");
   const [fileContent, setFileContent] = useState("");
@@ -332,10 +333,13 @@ export default function Home() {
         openai_api_key: llmConfig.apiKey || openaiApiKey || undefined,
       };
 
-      console.log(`[TutorialGen] Making API request to /api/tutorial-generator`);
+      console.log(`[TutorialGen] Making API request to /api/tutorial-generator/stream`);
+      
+      // Reset progress
+      setTutorialProgress({ stage: 'starting', message: 'Connecting...', progress: 0 });
 
-      // Call the API endpoint
-      const response = await fetch("/api/tutorial-generator", {
+      // Use SSE for streaming progress updates
+      const response = await fetch("/api/tutorial-generator/stream", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -343,47 +347,69 @@ export default function Home() {
         body: JSON.stringify(payload),
       });
 
-      console.log(`[TutorialGen] API response status: ${response.status}`);
-
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error("[TutorialGen] API error response text:", errorText);
-
-        let errorMessage = "Failed to generate tutorial";
-        try {
-          if (errorText) {
-            const errorData = JSON.parse(errorText);
-            errorMessage = errorData.error || errorData.details || errorMessage;
-          }
-        } catch (parseError) {
-          if (errorText) {
-            errorMessage = `Server error: ${errorText}`;
-          }
-        }
-
-        throw new Error(errorMessage);
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      const apiResult = await response.json();
-      console.log("[TutorialGen] API success response:", apiResult);
-      //check env variables for output directory
-      const OUTPUT_DIRECTORY = process.env.OUTPUT_DIRECTORY;
+      // Handle SSE stream
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      
+      if (!reader) {
+        throw new Error("No response body");
+      }
 
-      // Handle successful result
-      if (OUTPUT_DIRECTORY) {
-        console.log(`[TutorialGen] Tutorial created successfully in: ${OUTPUT_DIRECTORY}`);
-        showNotification(
-          "success",
-          "Tutorial created successfully!",
-          `Tutorial files are available in: ${OUTPUT_DIRECTORY}`
-        );
-      } else {
-        console.log("[TutorialGen] Tutorial creation completed");
-        showNotification(
-          "success",
-          "Tutorial creation completed",
-          "The tutorial flow has finished running."
-        );
+      let buffer = '';
+      
+      while (true) {
+        const { done, value } = await reader.read();
+        
+        if (done) break;
+        
+        buffer += decoder.decode(value, { stream: true });
+        
+        // Process complete SSE events
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // Keep incomplete line in buffer
+        
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            const eventType = line.slice(7);
+            continue;
+          }
+          
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              
+              if (data.stage) {
+                // Progress update
+                setTutorialProgress(data);
+                console.log(`[TutorialGen] Progress:`, data);
+              }
+              
+              if (data.success) {
+                // Completion event
+                console.log("[TutorialGen] Tutorial created successfully");
+                showNotification(
+                  "success",
+                  "Tutorial created successfully!",
+                  "The tutorial flow has finished running."
+                );
+              }
+              
+              if (data.message && !data.stage && !data.success) {
+                // Error event
+                throw new Error(data.message);
+              }
+            } catch (parseError) {
+              // Ignore parse errors for incomplete data
+              if (line.slice(6).trim()) {
+                console.warn("[TutorialGen] Failed to parse SSE data:", line);
+              }
+            }
+          }
+        }
       }
     } catch (err) {
       console.error("[TutorialGen] Tutorial creation error:", err);
@@ -397,6 +423,7 @@ export default function Home() {
       );
     } finally {
       console.log("[TutorialGen] Tutorial creation process finished");
+      setTutorialProgress(null);
       setIsProcessingTutorial(false);
     }
   };
@@ -489,7 +516,7 @@ export default function Home() {
 
         {/* Loading indicators */}
         <LoadingIndicator type="repository" isLoading={isLoading} />
-        <LoadingIndicator type="tutorial" isLoading={isProcessingTutorial} />
+        <LoadingIndicator type="tutorial" isLoading={isProcessingTutorial} progress={tutorialProgress} />
 
         {/* Repository stats */}
         {stats && <StatsDisplay stats={stats} activeVersion={activeVersion} />}

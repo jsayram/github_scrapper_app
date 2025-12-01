@@ -222,7 +222,12 @@ export class FetchRepo extends Node<SharedData> {
  * IdentifyAbstractions
  * ------------------------------------------------------------------------- */
 export class IdentifyAbstractions extends Node<SharedData> {
+  private _shared?: SharedData;
+  
   async prep(shared: SharedData) {
+    // Store shared reference for progress callback access
+    this._shared = shared;
+    
     const filesData = shared.files;
     const projectName = shared.project_name;
     const language = shared.language ?? "english";
@@ -285,6 +290,18 @@ export class IdentifyAbstractions extends Node<SharedData> {
       llmModel,
       llmBaseUrl,
     } = await prepRes;
+    
+    // Get progress callback from shared
+    const onProgress = this._shared?._onProgress;
+    
+    if (onProgress) {
+      await onProgress({
+        stage: 'abstractions',
+        message: 'Analyzing codebase and identifying key concepts...',
+        progress: 15
+      });
+    }
+    
     console.log("Identifying abstractions using LLM...");
 
     // Determine language-specific instructions and hints
@@ -450,7 +467,12 @@ Format the output as a YAML list of dictionaries:
  * AnalyzeRelationships
  * ------------------------------------------------------------------------- */
 export class AnalyzeRelationships extends Node<SharedData> {
+  private _shared?: SharedData;
+  
   async prep(shared: SharedData) {
+    // Store shared reference for progress callback access
+    this._shared = shared;
+    
     const abstractions = shared.abstractions;
     const filesData = shared.files;
     const projectName = shared.project_name;
@@ -525,6 +547,18 @@ export class AnalyzeRelationships extends Node<SharedData> {
       llmModel,
       llmBaseUrl,
     } = await prepRes;
+    
+    // Get progress callback from shared
+    const onProgress = this._shared?._onProgress;
+    
+    if (onProgress) {
+      await onProgress({
+        stage: 'relationships',
+        message: 'Analyzing relationships between concepts...',
+        progress: 22
+      });
+    }
+    
     console.log("Analyzing relationships using LLM...");
 
     // Determine language-specific instructions and hints
@@ -714,7 +748,12 @@ Now, provide the YAML output:
  * OrderChapters
  * ------------------------------------------------------------------------- */
 export class OrderChapters extends Node<SharedData> {
+  private _shared?: SharedData;
+  
   async prep(shared: SharedData) {
+    // Store shared reference for progress callback access
+    this._shared = shared;
+    
     const abstractions = shared.abstractions;
     const relationships = shared.relationships;
     const projectName = shared.project_name;
@@ -807,6 +846,18 @@ export class OrderChapters extends Node<SharedData> {
       llmModel,
       llmBaseUrl,
     } = await prepRes;
+    
+    // Get progress callback from shared
+    const onProgress = this._shared?._onProgress;
+    
+    if (onProgress) {
+      await onProgress({
+        stage: 'ordering',
+        message: 'Determining optimal chapter order...',
+        progress: 28
+      });
+    }
+    
     console.log("Determining chapter order using LLM...");
 
     // Construct the prompt for the LLM
@@ -969,6 +1020,8 @@ interface WriteChapterItem {
 export class WriteChapters extends BatchNode<SharedData, WriteChapterItem> {
   // Temporary storage for context across exec calls within a single run
   private chaptersWrittenSoFar: string[] = [];
+  private totalChapters: number = 0;
+  private onProgress?: (update: any) => Promise<void> | void;
 
   async prep(shared: SharedData): Promise<WriteChapterItem[]> {
     const chapterOrder = shared.chapter_order;
@@ -981,6 +1034,9 @@ export class WriteChapters extends BatchNode<SharedData, WriteChapterItem> {
     const llmProvider = shared.llm_provider || PROVIDER_IDS.OPENAI;
     const llmModel = shared.llm_model;
     const llmBaseUrl = shared.llm_base_url;
+    
+    // Progress callback from shared
+    this.onProgress = shared._onProgress;
     
     // Partial regeneration support
     const regenerationMode = shared.regeneration_mode ?? 'full';
@@ -1111,6 +1167,21 @@ export class WriteChapters extends BatchNode<SharedData, WriteChapterItem> {
     const cachedCount = itemsToProcess.filter(item => item.useCachedContent).length;
     const toGenerateCount = itemsToProcess.length - cachedCount;
     console.log(`Preparing to write ${itemsToProcess.length} chapters (${cachedCount} from cache, ${toGenerateCount} to generate)...`);
+    
+    // Store total for progress tracking
+    this.totalChapters = itemsToProcess.length;
+    
+    // Send initial chapters progress
+    if (this.onProgress) {
+      await this.onProgress({
+        stage: 'writing_chapters',
+        message: `Writing ${itemsToProcess.length} chapters...`,
+        progress: 30,
+        currentChapter: 0,
+        totalChapters: itemsToProcess.length,
+      });
+    }
+    
     return itemsToProcess; // Return the list of items for BatchNode processing
   }
 
@@ -1143,12 +1214,39 @@ export class WriteChapters extends BatchNode<SharedData, WriteChapterItem> {
       console.log(`Chapter ${chapterNum}: Using cached content for ${abstractionName}`);
       // Still add to chaptersWrittenSoFar for context
       this.chaptersWrittenSoFar.push(cachedContent);
+      
+      // Emit progress for cached chapter
+      if (this.onProgress) {
+        const progress = 30 + Math.round((chapterNum / this.totalChapters) * 60);
+        await this.onProgress({
+          stage: 'writing_chapters',
+          message: `Chapter ${chapterNum}/${this.totalChapters}: ${abstractionName} (cached)`,
+          progress,
+          currentChapter: chapterNum,
+          totalChapters: this.totalChapters,
+          chapterName: abstractionName,
+        });
+      }
+      
       return cachedContent;
     }
 
     console.log(
       `Writing chapter ${chapterNum} for: ${abstractionName} using LLM...`
     );
+    
+    // Emit progress for chapter being written
+    if (this.onProgress) {
+      const progress = 30 + Math.round(((chapterNum - 1) / this.totalChapters) * 60);
+      await this.onProgress({
+        stage: 'writing_chapters',
+        message: `Writing chapter ${chapterNum}/${this.totalChapters}: ${abstractionName}...`,
+        progress,
+        currentChapter: chapterNum,
+        totalChapters: this.totalChapters,
+        chapterName: abstractionName,
+      });
+    }
 
     // Prepare file context string
     const fileContextStr =
@@ -1272,6 +1370,19 @@ Now, directly provide a super beginner-friendly Markdown output (DON'T need \`\`
 
     // Add the generated content to the instance variable for the next iteration's context
     this.chaptersWrittenSoFar.push(chapterContent);
+    
+    // Emit progress after chapter completion
+    if (this.onProgress) {
+      const progress = 30 + Math.round((chapterNum / this.totalChapters) * 60);
+      await this.onProgress({
+        stage: 'writing_chapters',
+        message: `Completed chapter ${chapterNum}/${this.totalChapters}: ${abstractionName}`,
+        progress,
+        currentChapter: chapterNum,
+        totalChapters: this.totalChapters,
+        chapterName: abstractionName,
+      });
+    }
 
     return chapterContent; // Return the generated Markdown string
   }
@@ -1295,7 +1406,22 @@ Now, directly provide a super beginner-friendly Markdown output (DON'T need \`\`
  * CombineTutorial
  * ------------------------------------------------------------------------- */
 export class CombineTutorial extends Node<SharedData> {
+  private _shared?: SharedData;
+  
   async prep(shared: SharedData) {
+    // Store shared reference for progress callback access
+    this._shared = shared;
+    
+    // Send progress update
+    const onProgress = shared._onProgress;
+    if (onProgress) {
+      await onProgress({
+        stage: 'combining',
+        message: 'Combining chapters into final tutorial...',
+        progress: 92
+      });
+    }
+    
     const projectName = shared.project_name;
     const outputBaseDir = shared.output_dir ?? "output"; // Default to 'output'
     const repoUrl = shared.repo_url; // Optional, for linking in index.md

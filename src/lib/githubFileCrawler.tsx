@@ -64,6 +64,30 @@ export async function githubFileCrawler(options: CrawlerOptions): Promise<Crawle
 
     if (!response.ok) {
       const errorText = await response.text();
+      
+      // Special handling for bad credentials (401) errors
+      if (response.status === 401 || errorText.includes("Bad credentials") || errorText.includes("401")) {
+        throw new Error(
+          `GitHub authentication failed - Invalid or expired token.` +
+            `\n\n🔑 Your GitHub token appears to be invalid or has expired.\n\n` +
+            `How to fix this:\n\n` +
+            `Option 1: Generate a new token\n` +
+            `  1. Go to https://github.com/settings/tokens\n` +
+            `  2. Delete the old token if it exists\n` +
+            `  3. Click "Generate new token" → "Generate new token (classic)"\n` +
+            `  4. Give it a name (e.g., "Tutorial Generator")\n` +
+            `  5. Select scopes: "repo" (for private repos) or "public_repo" (for public only)\n` +
+            `  6. Click "Generate token" and copy it\n\n` +
+            `Option 2: Check your existing token\n` +
+            `  • Make sure you copied the entire token (starts with "ghp_" or "github_pat_")\n` +
+            `  • Check if the token has expired in GitHub Settings\n` +
+            `  • Verify the token has the required permissions\n\n` +
+            `Option 3: Update your .env.local file\n` +
+            `  • If using GITHUB_TOKEN in .env.local, replace it with the new token\n` +
+            `  • Restart the development server after updating`
+        );
+      }
+      
       // Special handling for rate limit errors
       if (response.status === 403 && errorText.includes("rate limit")) {
         let resetTime = "";
@@ -77,7 +101,18 @@ export async function githubFileCrawler(options: CrawlerOptions): Promise<Crawle
             `${rateLimit ? `Limit: ${rateLimit} requests per hour. ` : ""}` +
             `${rateLimitRemaining ? `Remaining: ${rateLimitRemaining} ` : ""}` +
             `${resetTime ? `Rate limit will reset at: ${resetTime}` : ""}` +
-            `\n\nTip: Add a GitHub personal access token to increase your rate limit from 60 to 5,000 requests per hour.`
+            `\n\n🔑 To increase your rate limit from 60 to 5,000 requests per hour:\n\n` +
+            `Option 1: Add token in the UI\n` +
+            `  • Enter your GitHub token in the "GitHub Token" field above\n\n` +
+            `Option 2: Add to .env.local file\n` +
+            `  • Create a .env.local file in your project root\n` +
+            `  • Add: GITHUB_TOKEN=your_token_here\n\n` +
+            `📋 How to get a GitHub Personal Access Token:\n` +
+            `  1. Go to https://github.com/settings/tokens\n` +
+            `  2. Click "Generate new token" → "Generate new token (classic)"\n` +
+            `  3. Give it a name (e.g., "Tutorial Generator")\n` +
+            `  4. Select scopes: "repo" (for private repos) or "public_repo" (for public only)\n` +
+            `  5. Click "Generate token" and copy it`
         );
       }
       throw new Error(`Error ${response.status}: ${errorText}`);
@@ -113,7 +148,18 @@ export async function simulateError(errorType: string): Promise<never> {
           `Limit: 60 requests per hour. ` +
           `Remaining: 0 ` +
           `Rate limit will reset at: ${resetTime.toLocaleTimeString()}` +
-          `\n\nTip: Add a GitHub personal access token to increase your rate limit from 60 to 5,000 requests per hour.`
+          `\n\n🔑 To increase your rate limit from 60 to 5,000 requests per hour:\n\n` +
+          `Option 1: Add token in the UI\n` +
+          `  • Enter your GitHub token in the "GitHub Token" field above\n\n` +
+          `Option 2: Add to .env.local file\n` +
+          `  • Create a .env.local file in your project root\n` +
+          `  • Add: GITHUB_TOKEN=your_token_here\n\n` +
+          `📋 How to get a GitHub Personal Access Token:\n` +
+          `  1. Go to https://github.com/settings/tokens\n` +
+          `  2. Click "Generate new token" → "Generate new token (classic)"\n` +
+          `  3. Give it a name (e.g., "Tutorial Generator")\n` +
+          `  4. Select scopes: "repo" (for private repos) or "public_repo" (for public only)\n` +
+          `  5. Click "Generate token" and copy it`
       );
 
     case "404":

@@ -13,6 +13,9 @@ export async function POST(request: Request) {
       maxFileSize 
     } = await request.json();
 
+    // Use token from request, or fallback to environment variable
+    const githubToken = token || process.env.GITHUB_TOKEN || process.env.GITHUB_ACCESS_TOKEN || process.env.GH_TOKEN;
+
     // Validate required inputs
     if (!repoUrl) {
       return NextResponse.json({ error: "Repository URL is required" }, { status: 400 });
@@ -41,7 +44,7 @@ export async function POST(request: Request) {
         repo,
         ref,
         path,
-        token,
+        token: githubToken,
         useRelativePaths,
         includePatterns: finalIncludePatterns,
         excludePatterns: finalExcludePatterns,
