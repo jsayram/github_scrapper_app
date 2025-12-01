@@ -95,9 +95,8 @@ export const LLM_PROVIDERS: LLMProvider[] = [
       createModel(PROVIDER_IDS.OPENAI, OPENAI_MODELS.GPT_5_1, 'Flagship model ⭐'),
       createModel(PROVIDER_IDS.OPENAI, OPENAI_MODELS.GPT_5, 'Latest GPT-5'),
       createModel(PROVIDER_IDS.OPENAI, OPENAI_MODELS.GPT_5_MINI, 'Fast, affordable GPT-5'),
-      // GPT-5 Codex Series
-      createModel(PROVIDER_IDS.OPENAI, OPENAI_MODELS.GPT_5_1_CODEX, 'Best for code generation'),
-      createModel(PROVIDER_IDS.OPENAI, OPENAI_MODELS.GPT_5_CODEX, 'Code generation'),
+      createModel(PROVIDER_IDS.OPENAI, OPENAI_MODELS.GPT_5_NANO, 'Fastest, cheapest GPT-5'),
+      createModel(PROVIDER_IDS.OPENAI, OPENAI_MODELS.GPT_5_PRO, 'Smartest, most precise'),
       // GPT-4.1 Series
       createModel(PROVIDER_IDS.OPENAI, OPENAI_MODELS.GPT_4_1, 'Fine-tunable'),
       createModel(PROVIDER_IDS.OPENAI, OPENAI_MODELS.GPT_4_1_MINI, 'Fast fine-tunable'),

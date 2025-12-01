@@ -31,6 +31,7 @@ import CodeAnalyticsDisplay, {
   CodeAnalytics,
 } from "@/components/CodeAnalyticsDisplay";
 import Footer from "@/components/Footer";
+import { DocumentationViewer } from "@/components/docs";
 
 export default function Home() {
   // State management
@@ -49,6 +50,12 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [isProcessingTutorial, setIsProcessingTutorial] = useState(false);
   const [tutorialProgress, setTutorialProgress] = useState<TutorialProgress | null>(null);
+  const [tutorialResult, setTutorialResult] = useState<{
+    chapters: { filename: string; title: string; content: string }[];
+    indexContent: string;
+    projectName: string;
+  } | null>(null);
+  const [showTutorialViewer, setShowTutorialViewer] = useState(false);
   const [error, setError] = useState("");
   const [selectedFile, setSelectedFile] = useState("");
   const [fileContent, setFileContent] = useState("");
@@ -390,12 +397,23 @@ export default function Home() {
               
               if (data.success) {
                 // Completion event
-                console.log("[TutorialGen] Tutorial created successfully");
+                console.log("[TutorialGen] Tutorial created successfully", data.result);
                 showNotification(
                   "success",
                   "Tutorial created successfully!",
                   "The tutorial flow has finished running."
                 );
+                
+                // Store the result for the viewer
+                if (data.result?.generatedChapters) {
+                  setTutorialResult({
+                    chapters: data.result.generatedChapters,
+                    indexContent: data.result.generatedIndex || '',
+                    projectName: data.result.projectName || repoUrl.split("/").pop()?.replace(/\.git$/, "") || "Tutorial",
+                  });
+                  // Show the viewer automatically
+                  setShowTutorialViewer(true);
+                }
               }
               
               if (data.message && !data.stage && !data.success) {
@@ -521,6 +539,37 @@ export default function Home() {
         {/* Repository stats */}
         {stats && <StatsDisplay stats={stats} activeVersion={activeVersion} />}
 
+        {/* View Tutorial Button - shows when tutorial is available */}
+        {tutorialResult && !showTutorialViewer && (
+          <div className="mb-6 p-4 bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-lg">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <svg className="h-6 w-6 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <div>
+                  <p className="font-semibold text-green-800 dark:text-green-200">
+                    Tutorial Generated Successfully!
+                  </p>
+                  <p className="text-sm text-green-600 dark:text-green-400">
+                    {tutorialResult.chapters.length} chapters created
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowTutorialViewer(true)}
+                className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white font-medium rounded-lg transition-colors flex items-center gap-2"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+                </svg>
+                View Tutorial
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Content when files are loaded */}
         {Object.keys(files).length > 0 && (
           <div className="space-y-6">
@@ -560,6 +609,19 @@ export default function Home() {
                 onClose={() => setShowSummary(false)}
               />
             </div>
+          </div>
+        )}
+
+        {/* Documentation Viewer - Inline within main content */}
+        {showTutorialViewer && tutorialResult && (
+          <div className="mt-6">
+            <DocumentationViewer
+              chapters={tutorialResult.chapters}
+              projectName={tutorialResult.projectName}
+              indexContent={tutorialResult.indexContent}
+              format="md"
+              onClose={() => setShowTutorialViewer(false)}
+            />
           </div>
         )}
       </main>

@@ -367,7 +367,14 @@ export async function runTutorialFlowWithProgress(
       progress: 100
     });
     
-    return result;
+    // Return result with generated content for the viewer
+    return {
+      ...result,
+      generatedChapters: shared.generated_chapters,
+      generatedIndex: shared.generated_index,
+      projectName: shared.project_name,
+      finalOutputDir: shared.final_output_dir,
+    };
   } catch (error) {
     console.error(`[TutorialFlow] Flow execution failed:`, error);
     throw error;

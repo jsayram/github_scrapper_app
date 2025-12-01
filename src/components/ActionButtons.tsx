@@ -17,14 +17,14 @@ const ActionButtons: React.FC<ActionButtonsProps> = ({
   handleCreateTutorial,
   files,
   repoUrl,
-  onLoadVersion
+  onLoadVersion,
 }) => {
   const [showCacheStats, setShowCacheStats] = useState(false);
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex gap-4">
+      <div className="flex items-center justify-between flex-wrap gap-4">
+        <div className="flex gap-4 items-center flex-wrap">
           <button
             type="submit"
             disabled={isLoading}

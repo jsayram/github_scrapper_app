@@ -1,6 +1,148 @@
 import { NextResponse } from 'next/server';
-import { getAllExcludedPatterns, getRequiredExcludedPatterns } from '@/lib/excludedPatterns';
+import { getRequiredExcludedPatterns } from '@/lib/excludedPatterns';
 import { getAllIncludedPatterns } from '@/lib/includedPatterns';
+
+// ============================================================================
+// RATE LIMIT TRACKING (Global across all requests)
+// ============================================================================
+interface RateLimitState {
+  remaining: number;
+  limit: number;
+  resetTime: number; // Unix timestamp in ms
+  lastUpdated: number;
+}
+
+const globalRateLimit: RateLimitState = {
+  remaining: 5000, // GitHub default for authenticated
+  limit: 5000,
+  resetTime: 0,
+  lastUpdated: 0,
+};
+
+// ETag cache for conditional requests (memory cache)
+const etagCache = new Map<string, { etag: string; data: unknown; timestamp: number }>();
+const ETAG_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+// Pre-compiled regex cache
+const regexCache = new Map<string, RegExp>();
+
+// Simple sleep utility
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+function updateRateLimitFromHeaders(headers: Headers) {
+  const remaining = headers.get('x-ratelimit-remaining');
+  const limit = headers.get('x-ratelimit-limit');
+  const reset = headers.get('x-ratelimit-reset');
+  
+  if (remaining) globalRateLimit.remaining = parseInt(remaining, 10);
+  if (limit) globalRateLimit.limit = parseInt(limit, 10);
+  if (reset) globalRateLimit.resetTime = parseInt(reset, 10) * 1000;
+  globalRateLimit.lastUpdated = Date.now();
+}
+
+function shouldPauseForRateLimit(): { shouldPause: boolean; waitMs: number } {
+  // If we're low on quota, pause proactively
+  if (globalRateLimit.remaining < 10) {
+    const now = Date.now();
+    if (globalRateLimit.resetTime > now) {
+      return { shouldPause: true, waitMs: globalRateLimit.resetTime - now + 1000 };
+    }
+  }
+  return { shouldPause: false, waitMs: 0 };
+}
+
+// Check rate limit budget and return wait time if needed
+async function checkRateLimitBudget(): Promise<number> {
+  const check = shouldPauseForRateLimit();
+  return check.shouldPause ? Math.min(check.waitMs, 60000) : 0;
+}
+
+// ============================================================================
+// FETCH WITH RETRY AND EXPONENTIAL BACKOFF
+// ============================================================================
+async function fetchWithRetry(
+  url: string, 
+  options: RequestInit, 
+  maxRetries = 3
+): Promise<Response> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    // Check rate limit before making request
+    const rateLimitCheck = shouldPauseForRateLimit();
+    if (rateLimitCheck.shouldPause) {
+      console.log(`[GitHub] Rate limit low (${globalRateLimit.remaining} remaining). Waiting ${Math.round(rateLimitCheck.waitMs / 1000)}s...`);
+      await new Promise(resolve => setTimeout(resolve, Math.min(rateLimitCheck.waitMs, 60000)));
+    }
+    
+    try {
+      const response = await fetch(url, options);
+      
+      // Update global rate limit tracking
+      updateRateLimitFromHeaders(response.headers);
+      
+      // Success or client error (don't retry 4xx except rate limits)
+      if (response.ok || (response.status >= 400 && response.status < 500 && response.status !== 429 && response.status !== 403)) {
+        return response;
+      }
+      
+      // Rate limit or abuse detection - wait and retry
+      if (response.status === 429 || (response.status === 403 && response.headers.get('x-ratelimit-remaining') === '0')) {
+        const retryAfter = response.headers.get('Retry-After');
+        const waitMs = retryAfter 
+          ? parseInt(retryAfter, 10) * 1000 
+          : Math.pow(2, attempt + 1) * 1000; // Exponential backoff: 2s, 4s, 8s
+        
+        console.log(`[GitHub] Rate limited (attempt ${attempt + 1}/${maxRetries}). Waiting ${waitMs / 1000}s...`);
+        await new Promise(resolve => setTimeout(resolve, waitMs));
+        continue;
+      }
+      
+      // Server error - retry with backoff
+      if (response.status >= 500) {
+        const waitMs = Math.pow(2, attempt) * 1000;
+        console.log(`[GitHub] Server error ${response.status} (attempt ${attempt + 1}/${maxRetries}). Waiting ${waitMs / 1000}s...`);
+        await new Promise(resolve => setTimeout(resolve, waitMs));
+        continue;
+      }
+      
+      return response;
+    } catch (error) {
+      lastError = error as Error;
+      const waitMs = Math.pow(2, attempt) * 1000;
+      console.log(`[GitHub] Network error (attempt ${attempt + 1}/${maxRetries}): ${lastError.message}. Waiting ${waitMs / 1000}s...`);
+      await new Promise(resolve => setTimeout(resolve, waitMs));
+    }
+  }
+  
+  throw lastError || new Error('Max retries exceeded');
+}
+
+// ============================================================================
+// PATTERN MATCHING WITH PRE-COMPILED REGEXES
+// ============================================================================
+function getCompiledRegex(pattern: string): RegExp {
+  let regex = regexCache.get(pattern);
+  if (!regex) {
+    const regexPattern = pattern
+      .replace(/\./g, '\\.')
+      .replace(/\*\*/g, '__GLOBSTAR__')
+      .replace(/\*/g, '[^/]*')
+      .replace(/__GLOBSTAR__/g, '.*');
+    regex = new RegExp(`^${regexPattern}$`);
+    regexCache.set(pattern, regex);
+  }
+  return regex;
+}
+
+function matchesPatternFast(path: string, pattern: string): boolean {
+  return getCompiledRegex(pattern).test(path);
+}
+
+// Pre-compile all patterns once at start
+function preCompilePatterns(patterns: string[]): void {
+  patterns.forEach(p => getCompiledRegex(p));
+}
 
 export async function POST(request: Request) {
   try {
@@ -52,6 +194,7 @@ export async function POST(request: Request) {
       });
       
       return NextResponse.json(result);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
       // Check if we have a GitHub API rate limit error
       if (error.rateLimitInfo) {
@@ -109,7 +252,7 @@ export async function POST(request: Request) {
                 errorMessage = `GitHub API error: ${parsedError.message}`;
               }
             }
-          } catch (e) {
+          } catch {
             // If parsing fails, keep the cleaned string version
           }
         }
@@ -154,6 +297,18 @@ function decodeBase64(base64String: string): string {
 }
 
 // HYBRID APPROACH: Function to crawl GitHub files - tries Tree API first, falls back to directory crawling
+interface CrawlOptions {
+  owner: string;
+  repo: string;
+  ref: string;
+  path: string;
+  token: string;
+  useRelativePaths: boolean;
+  includePatterns: string[];
+  excludePatterns: string[];
+  maxFileSize: number;
+}
+
 async function crawlGitHubFiles({ 
   owner, 
   repo, 
@@ -164,73 +319,46 @@ async function crawlGitHubFiles({
   includePatterns, 
   excludePatterns,
   maxFileSize 
-}: any) {
+}: CrawlOptions) {
   const files: Record<string, string> = {};
   const skippedFiles: [string, number][] = [];
   const excludedFiles: string[] = []; // Track files excluded by patterns
   let requestCount = 0;
   let method = 'unknown';
+  let cacheHit = false;
+  
+  // Pre-compile all patterns for faster matching
+  if (includePatterns) preCompilePatterns(includePatterns);
+  if (excludePatterns) preCompilePatterns(excludePatterns);
   
   // Function to check if a file would match include patterns (ignoring exclusions)
   function wouldBeIncluded(filePath: string, fileName: string, includePatterns?: string[]) {
     if (!includePatterns || includePatterns.length === 0) return true;
-    
-    function matchesPattern(path: string, pattern: string) {
-      const regexPattern = pattern
-        .replace(/\./g, '\\.')
-        .replace(/\*\*/g, '__GLOBSTAR__')
-        .replace(/\*/g, '[^/]*')
-        .replace(/__GLOBSTAR__/g, '.*');
-      
-      const regex = new RegExp(`^${regexPattern}$`);
-      return regex.test(path);
-    }
-    
     return includePatterns.some(pattern => 
-      matchesPattern(fileName, pattern) || matchesPattern(filePath, pattern)
+      matchesPatternFast(fileName, pattern) || matchesPatternFast(filePath, pattern)
     );
+  }
+  
+  // Adaptive batch size based on rate limit
+  function getAdaptiveBatchSize(): number {
+    if (globalRateLimit.remaining > 1000) return 50;
+    if (globalRateLimit.remaining > 500) return 25;
+    if (globalRateLimit.remaining > 100) return 10;
+    return 5;
+  }
+  
+  // Adaptive delay based on rate limit
+  function getAdaptiveDelay(): number {
+    if (globalRateLimit.remaining > 1000) return 50;
+    if (globalRateLimit.remaining > 500) return 100;
+    if (globalRateLimit.remaining > 100) return 200;
+    return 500;
   }
   
   // First try the tree API approach for efficiency
   try {
-    // Get default branch if ref is not specified
-    // if (!ref) {
-    //   const repoUrl = `https://api.github.com/repos/${owner}/${repo}`;
-    //   const headers: HeadersInit = token ? { 'Authorization': `token ${token}` } : {};
-    //   const repoResponse = await fetch(repoUrl, { headers });
-    //   requestCount++;
-      
-    //   // Check for rate limit headers
-    //   const rateLimitHeaders: Record<string, string> = {};
-    //   ['x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset'].forEach(header => {
-    //     const value = repoResponse.headers.get(header);
-    //     if (value) rateLimitHeaders[header] = value;
-    //   });
-      
-    //   if (!repoResponse.ok) {
-    //     const errorText = await repoResponse.text();
-        
-    //     // Special handling for rate limit errors
-    //     if (repoResponse.status === 403 && errorText.includes('rate limit')) {
-    //       throw {
-    //         rateLimitInfo: {
-    //           status: 403,
-    //           message: errorText,
-    //           headers: rateLimitHeaders
-    //         }
-    //       };
-    //     }
-        
-    //     // If we can't get repo info, fall back to master as common default
-    //     ref = 'master';
-    //   } else {
-    //     const repoInfo = await repoResponse.json();
-    //     ref = repoInfo.default_branch;
-    //   }
-    // }
-    
     // Get the repository tree recursively to maximize efficiency
-    const treeUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/${ref}?recursive=1`;
+    const treeUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/${ref || 'HEAD'}?recursive=1`;
     const headers: HeadersInit = {
       'Accept': 'application/vnd.github.v3+json'
     };
@@ -239,19 +367,35 @@ async function crawlGitHubFiles({
       headers['Authorization'] = `token ${token}`;
     }
     
-    const treeResponse = await fetch(treeUrl, { headers });
+    // Check ETag cache for conditional request
+    const cacheKey = `tree:${owner}/${repo}:${ref || 'HEAD'}`;
+    const cached = etagCache.get(cacheKey);
+    
+    if (cached && (Date.now() - cached.timestamp) < ETAG_CACHE_TTL) {
+      headers['If-None-Match'] = cached.etag;
+    }
+    
+    const treeResponse = await fetchWithRetry(treeUrl, { headers });
     requestCount++;
     
-    // Track rate limit
-    const rateLimitHeaders: Record<string, string> = {};
-    ['x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset'].forEach(header => {
-      const value = treeResponse.headers.get(header);
-      if (value) rateLimitHeaders[header] = value;
-    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let tree: any;
     
-    // Handle errors
-    if (!treeResponse.ok) {
+    // Handle 304 Not Modified - use cached data
+    if (treeResponse.status === 304 && cached) {
+      console.log(`[GitHub] Cache hit for ${owner}/${repo} - using cached tree`);
+      cacheHit = true;
+      tree = cached.data;
+    } else if (!treeResponse.ok) {
       const errorText = await treeResponse.text();
+      
+      // Track rate limit headers
+      const rateLimitHeaders: Record<string, string> = {};
+      ['x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset'].forEach(header => {
+        const value = treeResponse.headers.get(header);
+        if (value) rateLimitHeaders[header] = value;
+      });
+      
       if (treeResponse.status === 403 && errorText.includes('rate limit')) {
         throw {
           rateLimitInfo: {
@@ -262,7 +406,6 @@ async function crawlGitHubFiles({
         };
       }
       
-      // Handle abuse detection mechanism errors (HTTP 429)
       if (treeResponse.status === 429) {
         throw {
           abuseDetection: true,
@@ -270,21 +413,27 @@ async function crawlGitHubFiles({
         };
       }
       
-      // For other errors, we'll fall back to the directory crawl approach
       throw new Error(`Tree API error: ${treeResponse.status}`);
+    } else {
+      tree = await treeResponse.json();
+      
+      // Cache the response with ETag
+      const etag = treeResponse.headers.get('etag');
+      if (etag) {
+        etagCache.set(cacheKey, { etag, data: tree, timestamp: Date.now() });
+      }
     }
-    
-    const tree = await treeResponse.json();
     
     // Check if the tree was truncated (too many files)
     if (tree.truncated) {
-      console.log('Tree API response was truncated. Falling back to directory crawl.');
+      console.log('[GitHub] Tree API response was truncated. Falling back to directory crawl.');
       throw new Error('Tree API response was truncated');
     }
     
-    method = 'tree_api';
+    method = cacheHit ? 'tree_api_cached' : 'tree_api';
     
     // Check for excluded files that would have been included
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     tree.tree.forEach((item: any) => {
       if (item.type !== 'blob') return;
       
@@ -305,12 +454,13 @@ async function crawlGitHubFiles({
     
     // Filter for the files we want
     const filesToFetch = tree.tree
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .filter((item: any) => {
         // Only process files
         if (item.type !== 'blob') return false;
         
         // Handle path filtering
-        let itemPath = item.path;
+        const itemPath = item.path;
         if (path && !itemPath.startsWith(path)) return false;
         
         // Calculate relative path if requested
@@ -322,6 +472,7 @@ async function crawlGitHubFiles({
         // Apply include/exclude patterns
         return shouldIncludeFile(relPath, relPath.split('/').pop() || '', includePatterns, excludePatterns);
       })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .map((item: any) => {
         // Calculate relative path
         let relPath = item.path;
@@ -334,20 +485,33 @@ async function crawlGitHubFiles({
         };
       });
     
-    console.log(`Found ${filesToFetch.length} files to fetch via Tree API`);
+    console.log(`[GitHub] Found ${filesToFetch.length} files to fetch via Tree API`);
+    console.log(`[GitHub] Rate limit: ${globalRateLimit.remaining}/${globalRateLimit.limit} remaining`);
     
-    // Batch process files to be nice to API limits
-    const batchSize = 10;
+    // Adaptive batch processing based on rate limit
+    let processedCount = 0;
     
-    for (let i = 0; i < filesToFetch.length; i += batchSize) {
-      const batch = filesToFetch.slice(i, i + batchSize);
+    while (processedCount < filesToFetch.length) {
+      // Check rate limit budget before each batch
+      const waitTime = await checkRateLimitBudget();
+      if (waitTime > 0) {
+        console.log(`[GitHub] Rate limit low, waiting ${waitTime}ms before continuing...`);
+        await sleep(waitTime);
+      }
+      
+      // Get adaptive batch size based on remaining quota
+      const batchSize = getAdaptiveBatchSize();
+      const delay = getAdaptiveDelay();
+      
+      const batch = filesToFetch.slice(processedCount, processedCount + batchSize);
       
       // Use Promise.all to fetch files in parallel within each batch
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await Promise.all(batch.map(async (item: any) => {
         try {
           // Use the blob API to get file content
           const blobUrl = `https://api.github.com/repos/${owner}/${repo}/git/blobs/${item.sha}`;
-          const blobResponse = await fetch(blobUrl, { headers });
+          const blobResponse = await fetchWithRetry(blobUrl, { headers });
           requestCount++;
           
           if (blobResponse.ok) {
@@ -363,24 +527,31 @@ async function crawlGitHubFiles({
               try {
                 const decodedContent = decodeBase64(blobData.content);
                 files[item.relPath] = decodedContent;
-              } catch (e) {
-                console.error(`Failed to decode content for ${item.path}`, e);
+              } catch (decodeErr) {
+                console.error(`[GitHub] Failed to decode content for ${item.path}`, decodeErr);
               }
             }
           }
         } catch (error) {
-          console.error(`Error fetching ${item.path}:`, error);
+          console.error(`[GitHub] Error fetching ${item.path}:`, error);
         }
       }));
       
-      // Optional: Add a small delay between batches to be gentle on the API
-      if (i + batchSize < filesToFetch.length) {
-        await new Promise(resolve => setTimeout(resolve, 200));
+      processedCount += batch.length;
+      
+      // Adaptive delay between batches based on rate limit
+      if (processedCount < filesToFetch.length) {
+        await sleep(delay);
+      }
+      
+      // Log progress every 100 files
+      if (processedCount % 100 === 0 || processedCount === filesToFetch.length) {
+        console.log(`[GitHub] Progress: ${processedCount}/${filesToFetch.length} files (${globalRateLimit.remaining} API calls remaining)`);
       }
     }
   } catch (error) {
     // Fall back to directory-by-directory approach if tree approach fails
-    console.log('Falling back to directory crawl approach:', error);
+    console.log('[GitHub] Falling back to directory crawl approach:', error);
     
     // Reset counters for the fallback method
     requestCount = 0;
@@ -388,6 +559,13 @@ async function crawlGitHubFiles({
     
     // Fallback directory crawler implementation
     async function fetchContents(contentPath: string) {
+      // Check rate limit budget
+      const waitTime = await checkRateLimitBudget();
+      if (waitTime > 0) {
+        console.log(`[GitHub] Rate limit low, waiting ${waitTime}ms...`);
+        await sleep(waitTime);
+      }
+      
       const url = `https://api.github.com/repos/${owner}/${repo}/contents/${contentPath}`;
       const headers: HeadersInit = {
         'Accept': 'application/vnd.github.v3+json'
@@ -398,18 +576,18 @@ async function crawlGitHubFiles({
       }
       
       const params = ref ? `?ref=${ref}` : '';
-      const response = await fetch(`${url}${params}`, { headers });
+      const response = await fetchWithRetry(`${url}${params}`, { headers });
       requestCount++;
-      
-      // Check for rate limit headers that we want to capture
-      const rateLimitHeaders: Record<string, string> = {};
-      ['x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset'].forEach(header => {
-        const value = response.headers.get(header);
-        if (value) rateLimitHeaders[header] = value;
-      });
       
       if (!response.ok) {
         const errorText = await response.text();
+        
+        // Track rate limit headers
+        const rateLimitHeaders: Record<string, string> = {};
+        ['x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset'].forEach(header => {
+          const value = response.headers.get(header);
+          if (value) rateLimitHeaders[header] = value;
+        });
         
         // Special handling for rate limit errors
         if (response.status === 403 && errorText.includes('rate limit')) {
@@ -436,8 +614,10 @@ async function crawlGitHubFiles({
       const contents = await response.json();
       const contentsList = Array.isArray(contents) ? contents : [contents];
       
-      // Process in batches to be gentle on API
-      const batchSize = 5;
+      // Process in adaptive batches
+      const batchSize = getAdaptiveBatchSize();
+      const delay = getAdaptiveDelay();
+      
       for (let i = 0; i < contentsList.length; i += batchSize) {
         const batch = contentsList.slice(i, i + batchSize);
         
@@ -473,10 +653,10 @@ async function crawlGitHubFiles({
               return;
             }
             
-            // Get file content
+            // Get file content with retry
             try {
               if (item.download_url) {
-                const fileResponse = await fetch(item.download_url);
+                const fileResponse = await fetchWithRetry(item.download_url, {});
                 requestCount++;
                 
                 if (fileResponse.ok) {
@@ -489,7 +669,7 @@ async function crawlGitHubFiles({
                 }
               } else {
                 // Alternative method using content API
-                const contentResponse = await fetch(item.url, { headers });
+                const contentResponse = await fetchWithRetry(item.url, { headers });
                 requestCount++;
                 
                 if (contentResponse.ok) {
@@ -505,11 +685,12 @@ async function crawlGitHubFiles({
                   };
                 }
               }
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
             } catch (error: any) {
               if (error.abuseDetection) {
                 throw error; // Re-throw to be caught at the higher level
               }
-              console.error(`Error fetching content for ${itemPath}:`, error);
+              console.error(`[GitHub] Error fetching content for ${itemPath}:`, error);
             }
           } else if (item.type === 'dir') {
             // Recursively process directories
@@ -520,9 +701,9 @@ async function crawlGitHubFiles({
         // Wait for all promises in the batch to resolve
         await Promise.all(batchPromises);
         
-        // Add a small delay between batches
+        // Adaptive delay between batches
         if (i + batchSize < contentsList.length) {
-          await new Promise(resolve => setTimeout(resolve, 200));
+          await sleep(delay);
         }
       }
     }
@@ -531,7 +712,8 @@ async function crawlGitHubFiles({
     await fetchContents(path || '');
   }
   
-  console.log(`Fetched ${Object.keys(files).length} files with ${requestCount} API requests using ${method} method.`);
+  console.log(`[GitHub] Fetched ${Object.keys(files).length} files with ${requestCount} API requests using ${method} method.`);
+  console.log(`[GitHub] Final rate limit: ${globalRateLimit.remaining}/${globalRateLimit.limit}`);
   
   // Limit the number of excluded files to report to avoid excessively large responses
   const excludedFilesToReport = excludedFiles.length > 100 ? 
@@ -556,29 +738,17 @@ async function crawlGitHubFiles({
 }
 
 // Helper to check if a file should be included based on patterns
+// Uses pre-compiled regex patterns for better performance
 function shouldIncludeFile(
   filePath: string, 
   fileName: string, 
   includePatterns?: string[], 
   excludePatterns?: string[]
 ) {
-  // Function to check if a path matches a pattern
-  function matchesPattern(path: string, pattern: string) {
-    // Simple pattern matching implementation
-    const regexPattern = pattern
-      .replace(/\./g, '\\.')
-      .replace(/\*\*/g, '__GLOBSTAR__')
-      .replace(/\*/g, '[^/]*')
-      .replace(/__GLOBSTAR__/g, '.*');
-    
-    const regex = new RegExp(`^${regexPattern}$`);
-    return regex.test(path);
-  }
-
   // Check exclude patterns first - always prioritize exclusions
   if (excludePatterns && excludePatterns.length > 0) {
     const shouldExclude = excludePatterns.some(pattern => 
-      matchesPattern(filePath, pattern) || matchesPattern(fileName, pattern)
+      matchesPatternFast(filePath, pattern) || matchesPatternFast(fileName, pattern)
     );
     
     // If file should be excluded, return false regardless of include patterns
@@ -595,7 +765,7 @@ function shouldIncludeFile(
   
   // Check if file matches any include pattern
   const shouldInclude = includePatterns.some(pattern => 
-    matchesPattern(fileName, pattern) || matchesPattern(filePath, pattern)
+    matchesPatternFast(fileName, pattern) || matchesPatternFast(filePath, pattern)
   );
   
   return shouldInclude;

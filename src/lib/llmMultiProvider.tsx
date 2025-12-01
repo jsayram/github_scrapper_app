@@ -394,7 +394,7 @@ export async function callLLM({
   provider: providerId = PROVIDER_IDS.OPENAI,
   model: modelId,
   temperature = 0.2,
-  maxTokens = 4096,
+  maxTokens = 8192,
   useCache = true,
   customApiKey,
   customBaseUrl,
@@ -510,7 +510,7 @@ export async function callLLM({
     }
     
     if (!result.content) {
-      throw new Error(`${providerId} API returned an empty response for model "${actualModelId}". The model may not exist or may require different parameters.`);
+      throw new Error(`${providerId} API returned an empty response for model "${actualModelId}". This could be due to: (1) prompt too long for the model's context window, (2) content moderation filtering, or (3) the model may not be available. Try a different model like gpt-4o or gpt-4.1.`);
     }
     
     log.info('LLM response received', { 

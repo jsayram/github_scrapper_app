@@ -48,9 +48,8 @@ export const OPENAI_MODELS = {
   GPT_5_1: 'gpt-5.1',
   GPT_5: 'gpt-5',
   GPT_5_MINI: 'gpt-5-mini',
-  // GPT-5 Codex Series
-  GPT_5_1_CODEX: 'gpt-5.1-codex',
-  GPT_5_CODEX: 'gpt-5-codex',
+  GPT_5_NANO: 'gpt-5-nano',
+  GPT_5_PRO: 'gpt-5-pro',
   // GPT-4.1 Series
   GPT_4_1: 'gpt-4.1',
   GPT_4_1_MINI: 'gpt-4.1-mini',
@@ -178,9 +177,8 @@ export const MODEL_DISPLAY_NAMES: Record<string, string> = {
   [OPENAI_MODELS.GPT_5_1]: 'GPT-5.1',
   [OPENAI_MODELS.GPT_5]: 'GPT-5',
   [OPENAI_MODELS.GPT_5_MINI]: 'GPT-5 Mini',
-  // OpenAI - GPT-5 Codex Series
-  [OPENAI_MODELS.GPT_5_1_CODEX]: 'GPT-5.1 Codex',
-  [OPENAI_MODELS.GPT_5_CODEX]: 'GPT-5 Codex',
+  [OPENAI_MODELS.GPT_5_NANO]: 'GPT-5 Nano',
+  [OPENAI_MODELS.GPT_5_PRO]: 'GPT-5 Pro',
   // OpenAI - GPT-4.1 Series
   [OPENAI_MODELS.GPT_4_1]: 'GPT-4.1',
   [OPENAI_MODELS.GPT_4_1_MINI]: 'GPT-4.1 Mini',
@@ -352,9 +350,8 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   [OPENAI_MODELS.GPT_5_1]: 200000,
   [OPENAI_MODELS.GPT_5]: 200000,
   [OPENAI_MODELS.GPT_5_MINI]: 200000,
-  // OpenAI - GPT-5 Codex Series
-  [OPENAI_MODELS.GPT_5_1_CODEX]: 200000,
-  [OPENAI_MODELS.GPT_5_CODEX]: 200000,
+  [OPENAI_MODELS.GPT_5_NANO]: 128000,
+  [OPENAI_MODELS.GPT_5_PRO]: 200000,
   // OpenAI - GPT-4.1 Series
   [OPENAI_MODELS.GPT_4_1]: 200000,
   [OPENAI_MODELS.GPT_4_1_MINI]: 200000,
@@ -452,12 +449,11 @@ export interface ModelPricing {
 
 export const MODEL_PRICING: Record<string, ModelPricing> = {
   // OpenAI - GPT-5 Series (Standard pricing per 1M tokens)
-  [OPENAI_MODELS.GPT_5_1]: { input: 2.50, output: 20.00 },
-  [OPENAI_MODELS.GPT_5]: { input: 2.50, output: 20.00 },
-  [OPENAI_MODELS.GPT_5_MINI]: { input: 0.45, output: 3.60 },
-  // OpenAI - GPT-5 Codex Series
-  [OPENAI_MODELS.GPT_5_1_CODEX]: { input: 2.50, output: 20.00 },
-  [OPENAI_MODELS.GPT_5_CODEX]: { input: 2.50, output: 20.00 },
+  [OPENAI_MODELS.GPT_5_1]: { input: 1.25, output: 10.00 },
+  [OPENAI_MODELS.GPT_5]: { input: 1.25, output: 10.00 },
+  [OPENAI_MODELS.GPT_5_MINI]: { input: 0.25, output: 2.00 },
+  [OPENAI_MODELS.GPT_5_NANO]: { input: 0.05, output: 0.40 },
+  [OPENAI_MODELS.GPT_5_PRO]: { input: 15.00, output: 120.00 },
   // OpenAI - GPT-4.1 Series
   [OPENAI_MODELS.GPT_4_1]: { input: 3.50, output: 14.00 },
   [OPENAI_MODELS.GPT_4_1_MINI]: { input: 0.70, output: 2.80 },

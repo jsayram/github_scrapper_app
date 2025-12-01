@@ -20,6 +20,26 @@ import { CrawlerResult } from "@/lib/githubFileCrawler"; // Assuming this is the
 import { PROVIDER_IDS } from "@/lib/constants/llm";
 import { cacheLog } from "@/lib/cacheLogger";
 
+// Simple type for output format - always 'md' now
+type OutputFormat = 'md';
+
+// Helper functions for filenames (simplified since we only support md)
+function getFileExtension(): string {
+  return '.md';
+}
+
+function createSafeFilenameWithFormat(name: string, prefix: number): string {
+  // Sanitize name for filesystem
+  const safeName = name
+    .toLowerCase()
+    .replace(/[^a-z0-9\s_-]/g, '')
+    .replace(/\s+/g, '_')
+    .substring(0, 50);
+  
+  const paddedPrefix = String(prefix).padStart(2, '0');
+  return `${paddedPrefix}_${safeName}.md`;
+}
+
 // Define types for shared data for better type safety
 interface SharedData {
   repo_url?: string;
@@ -53,6 +73,13 @@ interface SharedData {
   cached_chapters?: Record<string, string>;  // slug -> cached content
   cached_abstractions?: Abstraction[];
   cached_relationships?: RelationshipData;
+  
+  // Output format (md or mdx)
+  output_format?: OutputFormat;
+  
+  // Generated tutorial data (for viewer)
+  generated_chapters?: { filename: string; title: string; content: string }[];
+  generated_index?: string;
 }
 
 interface Abstraction {
@@ -102,12 +129,10 @@ function getContentForIndices(
 
 /**
  * Creates a filesystem-safe filename from a potentially translated name.
+ * Always uses .md format.
  */
 function createSafeFilename(name: string, prefix: number): string {
-  const safeBase = name.replace(/[^a-zA-Z0-9_.-]/g, "_").toLowerCase();
-  // Pad prefix to 2 digits
-  const paddedPrefix = String(prefix).padStart(2, "0");
-  return `${paddedPrefix}_${safeBase}.md`;
+  return createSafeFilenameWithFormat(name, prefix);
 }
 
 /* -------------------------------------------------------------------------
@@ -994,6 +1019,7 @@ Now, provide the YAML output:`;
 /* -------------------------------------------------------------------------
  * WriteChapters (BatchNode)
  * Supports partial regeneration - uses cached chapters when available
+ * Supports both .md and .mdx output formats
  * ------------------------------------------------------------------------- */
 interface WriteChapterItem {
   chapterNum: number;
@@ -1042,6 +1068,7 @@ export class WriteChapters extends BatchNode<SharedData, WriteChapterItem> {
     const regenerationMode = shared.regeneration_mode ?? 'full';
     const chaptersToRegenerate = shared.chapters_to_regenerate ?? [];
     const cachedChapters = shared.cached_chapters ?? {};
+    const outputFormat = shared.output_format ?? 'md';
 
     if (!chapterOrder)
       throw new Error("Chapter order not found in shared state.");
@@ -1056,6 +1083,7 @@ export class WriteChapters extends BatchNode<SharedData, WriteChapterItem> {
 
     const allChaptersList: string[] = [];
     const chapterFilenamesMap: Record<number, ChapterFilenameInfo> = {}; // Map index -> info
+    const fileExt = getFileExtension();
 
     // First pass: Generate filenames and the full chapter list string
     chapterOrder.forEach((abstractionIndex, i) => {
@@ -1090,6 +1118,7 @@ export class WriteChapters extends BatchNode<SharedData, WriteChapterItem> {
     } else {
       cacheLog.info(`Full regeneration mode: Generating all chapters fresh`);
     }
+    cacheLog.info(`Output format: md`);
     const itemsToProcess: WriteChapterItem[] = [];
 
     // Second pass: Prepare items for each chapter
@@ -1115,8 +1144,9 @@ export class WriteChapters extends BatchNode<SharedData, WriteChapterItem> {
       const nextChapter =
         nextChapterIndex !== -1 ? chapterFilenamesMap[nextChapterIndex] : null;
         
-      // Generate chapter slug for cache lookup
-      const chapterSlug = createSafeFilename(abstractionDetails.name, i + 1).replace('.md', '');
+      // Generate chapter slug for cache lookup (strip extension)
+      const chapterSlug = createSafeFilename(abstractionDetails.name, i + 1)
+        .replace('.md', '');
       
       // Determine if we should use cached content
       let useCachedContent = false;
@@ -1287,7 +1317,7 @@ export class WriteChapters extends BatchNode<SharedData, WriteChapterItem> {
     }
     // --- End Language Specific Prompts ---
 
-    // Construct the prompt for the LLM
+    // Always generate Markdown
     const prompt = `
 ${languageInstruction}Write a very beginner-friendly tutorial chapter (in Markdown format) for the project \`${projectName}\` about the concept: "${abstractionName}". This is Chapter ${chapterNum}.
 
@@ -1306,8 +1336,8 @@ Relevant Code Snippets (Code itself remains unchanged):
 ${fileContextStr}
 
 Instructions for the chapter (Generate content in ${
-      language.toLowerCase() === "english" ? "English" : language.capitalize()
-    } unless specified otherwise):
+        language.toLowerCase() === "english" ? "English" : language.capitalize()
+      } unless specified otherwise):
 - Start with a clear heading (e.g., \`# Chapter ${chapterNum}: ${abstractionName}\`). Use the provided concept name.
 ${
   prevChapter
@@ -1429,6 +1459,7 @@ export class CombineTutorial extends Node<SharedData> {
     const chapterOrder = shared.chapter_order;
     const abstractions = shared.abstractions;
     const chaptersContent = shared.chapters; // List of Markdown strings
+    const fileExt = '.md';
 
     if (!projectName)
       throw new Error("Project name not found in shared state.");
@@ -1485,8 +1516,10 @@ export class CombineTutorial extends Node<SharedData> {
     const mermaidDiagram = mermaidLines.join("\n");
     // --- End Mermaid ---
 
-    // --- Prepare index.md content ---
+    // --- Prepare index content ---
+    const indexFilename = `index${fileExt}`;
     let indexContent = `# Tutorial: ${projectName}\n\n`;
+    
     indexContent += `${relationshipsData.summary}\n\n`; // Use potentially translated summary
 
     // Add source repo link if available (fixed English string)
@@ -1502,7 +1535,7 @@ export class CombineTutorial extends Node<SharedData> {
     // Add Chapters section header (fixed English string)
     indexContent += `## Chapters\n\n`;
 
-    const chapterFilesData: { filename: string; content: string }[] = [];
+    const chapterFilesData: { filename: string; title: string; content: string }[] = [];
     const numChaptersToProcess = Math.min(
       chapterOrder.length,
       chaptersContent.length
@@ -1522,7 +1555,7 @@ export class CombineTutorial extends Node<SharedData> {
       const chapterNum = i + 1;
       const filename = createSafeFilename(abstractionName, chapterNum);
 
-      // Add link to index.md (uses potentially translated name)
+      // Add link to index (uses potentially translated name)
       indexContent += `${chapterNum}. [${abstractionName}](${filename})\n`;
 
       // Prepare chapter content with attribution (fixed English string)
@@ -1533,21 +1566,26 @@ export class CombineTutorial extends Node<SharedData> {
       // Add fixed English attribution
       chapterContent += `\n\n---\n\nGenerated by [Code Detail's AI Project Tutorial Builder](https://codedetails.io) - Code Details\n\n---\n\n`;
 
-      chapterFilesData.push({ filename: filename, content: chapterContent });
+      chapterFilesData.push({ 
+        filename: filename, 
+        title: `Chapter ${chapterNum}: ${abstractionName}`,
+        content: chapterContent 
+      });
     }
 
-    // Add attribution to index.md (fixed English string)
+    // Add attribution to index (fixed English string)
     indexContent += `\n\n---\n\nGenerated by [Code Detail's AI Project Tutorial Builder](https://codedetails.io) - Code Details\n\n---\n\n`;
 
     return {
       outputPath,
       indexContent,
-      chapterFiles: chapterFilesData, // List of {filename, content}
+      indexFilename,
+      chapterFiles: chapterFilesData, // List of {filename, title, content}
     } as const;
   }
 
-  async exec(prepRes: ReturnType<this["prep"]>): Promise<string> {
-    const { outputPath, indexContent, chapterFiles } = await prepRes;
+  async exec(prepRes: ReturnType<this["prep"]>): Promise<{ outputPath: string; chapters: { filename: string; title: string; content: string }[]; indexContent: string }> {
+    const { outputPath, indexContent, indexFilename, chapterFiles } = await prepRes;
 
     console.log(`Combining tutorial into directory: ${outputPath}`);
 
@@ -1555,8 +1593,8 @@ export class CombineTutorial extends Node<SharedData> {
       // Create the output directory recursively, ignoring errors if it already exists
       await fs.mkdir(outputPath, { recursive: true });
 
-      // Write index.md
-      const indexFilepath = path.join(outputPath, "index.md");
+      // Write index file with correct extension
+      const indexFilepath = path.join(outputPath, indexFilename);
       await fs.writeFile(indexFilepath, indexContent, { encoding: "utf-8" });
       console.log(`  - Wrote ${indexFilepath}`);
 
@@ -1585,17 +1623,29 @@ export class CombineTutorial extends Node<SharedData> {
       throw error;
     }
 
-    return outputPath; // Return the final output directory path
+    // Return data for the viewer
+    return {
+      outputPath,
+      chapters: chapterFiles,
+      indexContent,
+    };
   }
 
   async post(
     shared: SharedData,
-    _prepRes: unknown,
+    prepRes: unknown,
     execRes: unknown
   ): Promise<string | undefined> {
+    const result = execRes as { outputPath: string; chapters: { filename: string; title: string; content: string }[]; indexContent: string };
+    
     // Store the final output directory path in shared data
-    shared.final_output_dir = execRes as string;
-    console.log(`\nTutorial generation complete! Files are in: ${execRes}`);
+    shared.final_output_dir = result.outputPath;
+    
+    // Store generated content for the viewer
+    shared.generated_chapters = result.chapters;
+    shared.generated_index = result.indexContent;
+    
+    console.log(`\nTutorial generation complete! Files are in: ${result.outputPath}`);
     return undefined;
   }
 }
