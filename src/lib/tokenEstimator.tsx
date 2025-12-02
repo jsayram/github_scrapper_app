@@ -37,7 +37,12 @@ export interface TokenLimitConfig {
   outputReserve?: number;
   /** Whether to use strict mode (lower thresholds) */
   strictMode?: boolean;
+  /** Documentation mode - architecture uses signature extraction (~80% fewer tokens) */
+  documentationMode?: 'tutorial' | 'architecture';
 }
+
+// Architecture mode uses signature extraction which reduces tokens by ~80%
+const ARCHITECTURE_MODE_REDUCTION = 0.20; // Only 20% of tokens used
 
 /**
  * Estimate token count from text
@@ -154,7 +159,7 @@ export function estimateTokensForFiles(
   providerId: string,
   modelId: string,
   config?: TokenLimitConfig
-): TokenEstimation & { fileBreakdown: Array<{ path: string; tokens: number }> } {
+): TokenEstimation & { fileBreakdown: Array<{ path: string; tokens: number }>; isArchitectureMode?: boolean } {
   // Normalize file format
   const normalizedFiles = files.map(f => {
     if (Array.isArray(f)) {
@@ -176,7 +181,56 @@ export function estimateTokensForFiles(
   const combinedContent = normalizedFiles.map(f => `File: ${f.path}\n${f.content}`).join('\n\n');
   
   // Get base estimation
-  const baseEstimation = estimateTokensWithWarning(combinedContent, providerId, modelId, config);
+  let baseEstimation = estimateTokensWithWarning(combinedContent, providerId, modelId, config);
+  
+  // Apply architecture mode reduction (signature extraction uses ~80% fewer tokens)
+  const isArchitectureMode = config?.documentationMode === 'architecture';
+  if (isArchitectureMode) {
+    const reducedTokens = Math.ceil(baseEstimation.estimatedTokens * ARCHITECTURE_MODE_REDUCTION);
+    const percentUsed = (reducedTokens / baseEstimation.availableTokens) * 100;
+    const isOverLimit = reducedTokens > baseEstimation.availableTokens;
+    
+    // Recalculate warning level
+    let warningLevel: TokenEstimation['warningLevel'];
+    if (percentUsed > 100) {
+      warningLevel = 'critical';
+    } else if (percentUsed > 90) {
+      warningLevel = 'danger';
+    } else if (percentUsed > 75) {
+      warningLevel = 'warning';
+    } else {
+      warningLevel = 'safe';
+    }
+    
+    // Update message for architecture mode
+    const model = getModel(providerId, modelId);
+    const modelName = model?.name || modelId;
+    let message: string;
+    const recommendations: string[] = [];
+    
+    if (isOverLimit) {
+      const overBy = reducedTokens - baseEstimation.availableTokens;
+      message = `⚠️ Architecture mode: ~${reducedTokens.toLocaleString()} tokens (reduced from ${baseEstimation.estimatedTokens.toLocaleString()}) exceeds ${modelName} limit by ~${overBy.toLocaleString()} tokens.`;
+      recommendations.push('Reduce the number of files selected');
+      recommendations.push('Use a model with a larger context window');
+    } else if (warningLevel === 'danger') {
+      message = `🟠 Architecture mode: ~${reducedTokens.toLocaleString()} tokens (${percentUsed.toFixed(1)}% of context). Original: ${baseEstimation.estimatedTokens.toLocaleString()} tokens.`;
+    } else if (warningLevel === 'warning') {
+      message = `📊 Architecture mode: ~${reducedTokens.toLocaleString()} tokens (${percentUsed.toFixed(1)}% of context). Reduced from ${baseEstimation.estimatedTokens.toLocaleString()}.`;
+    } else {
+      message = `✅ Architecture mode: ~${reducedTokens.toLocaleString()} tokens (${percentUsed.toFixed(1)}% of context). ~80% reduction from full content.`;
+    }
+    
+    baseEstimation = {
+      ...baseEstimation,
+      estimatedTokens: reducedTokens,
+      percentUsed,
+      isOverLimit,
+      warningLevel,
+      message,
+      recommendations,
+    };
+  }
   
   // Add file-specific recommendations if over limit
   if (baseEstimation.isOverLimit) {

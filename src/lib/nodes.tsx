@@ -49,6 +49,7 @@ interface SharedData {
   include_patterns?: string[];
   exclude_patterns?: string[];
   max_file_size?: number;
+  max_lines_per_file?: number; // Maximum lines per file for truncation (default: 150)
   files?: [string, string][]; // Array of [path, content] tuples
   language?: string;
   use_cache?: boolean;
@@ -66,6 +67,7 @@ interface SharedData {
   llm_model?: string;     // Model ID
   llm_api_key?: string;   // API key for the provider
   llm_base_url?: string;  // Custom base URL (for Ollama, Azure, etc.)
+  model_context_window?: number;  // Model's context window in tokens (dynamic per model)
   
   // Partial regeneration support
   regeneration_mode?: 'full' | 'partial' | 'partial_reidentify' | 'skip';
@@ -76,6 +78,9 @@ interface SharedData {
   
   // Output format (md or mdx)
   output_format?: OutputFormat;
+  
+  // Documentation mode: 'tutorial' for step-by-step, 'architecture' for high-level overview
+  documentation_mode?: 'tutorial' | 'architecture';
   
   // Generated tutorial data (for viewer)
   generated_chapters?: { filename: string; title: string; content: string }[];
@@ -125,6 +130,238 @@ function getContentForIndices(
     }
   }
   return map;
+}
+
+/**
+ * Smart file content truncation to reduce token count while preserving key information.
+ * Keeps the first N lines (imports, class definitions, function signatures) and last M lines.
+ * @param content - The file content to truncate
+ * @param maxStartLines - Maximum lines to keep from the start (default: 200)
+ * @param maxEndLines - Maximum lines to keep from the end (default: 50)
+ * @returns Truncated content with indicator if truncation occurred
+ */
+function truncateFileContent(
+  content: string,
+  maxStartLines: number = 200,
+  maxEndLines: number = 50
+): string {
+  const lines = content.split('\n');
+  const totalLines = lines.length;
+  const maxTotalLines = maxStartLines + maxEndLines;
+  
+  // If file is small enough, return as-is
+  if (totalLines <= maxTotalLines) {
+    return content;
+  }
+  
+  // Take first N lines and last M lines
+  const startPortion = lines.slice(0, maxStartLines);
+  const endPortion = lines.slice(-maxEndLines);
+  const omittedCount = totalLines - maxTotalLines;
+  
+  return [
+    ...startPortion,
+    `\n// ... [${omittedCount} lines omitted for brevity - file has ${totalLines} total lines] ...\n`,
+    ...endPortion
+  ].join('\n');
+}
+
+/**
+ * Gets content for specific file indices with smart truncation applied.
+ * Returns a map keyed `"idx # path"` → truncated file contents.
+ */
+function getContentForIndicesTruncated(
+  filesData: [string, string][],
+  indices: number[],
+  maxLinesPerFile: number = 150
+): Record<string, string> {
+  const map: Record<string, string> = {};
+  const maxStartLines = Math.floor(maxLinesPerFile * 0.8);
+  const maxEndLines = maxLinesPerFile - maxStartLines;
+  
+  for (const i of indices) {
+    if (i >= 0 && i < filesData.length) {
+      const [p, c] = filesData[i];
+      map[`${i} # ${p}`] = truncateFileContent(c, maxStartLines, maxEndLines);
+    }
+  }
+  return map;
+}
+
+/**
+ * Extracts high-level signatures from file content for architecture documentation.
+ * Captures imports, exports, interfaces, types, function/class signatures without implementation.
+ * This dramatically reduces token count while preserving structural understanding.
+ */
+function extractFileSignatures(content: string, filePath: string): string {
+  const lines = content.split('\n');
+  const signatures: string[] = [];
+  let inMultiLineImport = false;
+  let inInterface = false;
+  let inType = false;
+  let braceDepth = 0;
+  let currentBlock: string[] = [];
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    
+    // Skip empty lines and comments (unless in a block we're capturing)
+    if (!inMultiLineImport && !inInterface && !inType) {
+      if (trimmed === '' || trimmed.startsWith('//')) continue;
+    }
+    
+    // Capture import statements (single and multi-line)
+    if (trimmed.startsWith('import ') || inMultiLineImport) {
+      signatures.push(line);
+      if (trimmed.includes('{') && !trimmed.includes('}')) {
+        inMultiLineImport = true;
+      }
+      if (trimmed.includes('}') || (trimmed.includes('from ') && trimmed.endsWith(';') || trimmed.endsWith("'") || trimmed.endsWith('"'))) {
+        inMultiLineImport = false;
+      }
+      continue;
+    }
+    
+    // Capture export statements
+    if (trimmed.startsWith('export ') && !trimmed.startsWith('export default function') && !trimmed.startsWith('export default class') && !trimmed.startsWith('export class') && !trimmed.startsWith('export function') && !trimmed.startsWith('export async function')) {
+      // Simple exports like "export { thing }" or "export type"
+      if (trimmed.startsWith('export type ') || trimmed.startsWith('export interface ')) {
+        // Will be handled below
+      } else {
+        signatures.push(line);
+        continue;
+      }
+    }
+    
+    // Capture interface definitions (with body structure)
+    if (trimmed.startsWith('interface ') || trimmed.startsWith('export interface ')) {
+      inInterface = true;
+      braceDepth = 0;
+      currentBlock = [line];
+      if (trimmed.includes('{')) braceDepth++;
+      if (trimmed.includes('}')) braceDepth--;
+      if (braceDepth === 0 && trimmed.includes('}')) {
+        signatures.push(currentBlock.join('\n'));
+        inInterface = false;
+        currentBlock = [];
+      }
+      continue;
+    }
+    
+    if (inInterface) {
+      currentBlock.push(line);
+      if (trimmed.includes('{')) braceDepth++;
+      if (trimmed.includes('}')) braceDepth--;
+      if (braceDepth === 0) {
+        signatures.push(currentBlock.join('\n'));
+        inInterface = false;
+        currentBlock = [];
+      }
+      continue;
+    }
+    
+    // Capture type definitions
+    if (trimmed.startsWith('type ') || trimmed.startsWith('export type ')) {
+      if (trimmed.includes('=') && (trimmed.endsWith(';') || trimmed.endsWith("'") || trimmed.endsWith('"') || trimmed.endsWith('>'))) {
+        // Single-line type
+        signatures.push(line);
+      } else {
+        // Multi-line type
+        inType = true;
+        braceDepth = 0;
+        currentBlock = [line];
+        if (trimmed.includes('{') || trimmed.includes('(')) braceDepth++;
+        if (trimmed.includes('}') || trimmed.includes(')')) braceDepth--;
+      }
+      continue;
+    }
+    
+    if (inType) {
+      currentBlock.push(line);
+      if (trimmed.includes('{') || trimmed.includes('(')) braceDepth++;
+      if (trimmed.includes('}') || trimmed.includes(')')) braceDepth--;
+      if (braceDepth === 0 && (trimmed.endsWith(';') || trimmed.endsWith('}') || trimmed.endsWith(')'))) {
+        signatures.push(currentBlock.join('\n'));
+        inType = false;
+        currentBlock = [];
+      }
+      continue;
+    }
+    
+    // Capture function signatures (just the signature, not the body)
+    if (trimmed.match(/^(export\s+)?(async\s+)?function\s+\w+/) || 
+        trimmed.match(/^(export\s+)?const\s+\w+\s*=\s*(async\s+)?\(/) ||
+        trimmed.match(/^(export\s+)?const\s+\w+\s*=\s*(async\s+)?function/)) {
+      // Extract just the function signature
+      const funcMatch = trimmed.match(/^(.+?)\s*[{=]/);
+      if (funcMatch) {
+        signatures.push(`${funcMatch[1]} { /* ... */ }`);
+      } else {
+        signatures.push(`${trimmed.split('{')[0].trim()} { /* ... */ }`);
+      }
+      continue;
+    }
+    
+    // Capture class declarations (just the class line and constructor/method signatures)
+    if (trimmed.match(/^(export\s+)?(default\s+)?class\s+\w+/)) {
+      signatures.push(`${trimmed.split('{')[0].trim()} {`);
+      // Look ahead for constructor and method signatures
+      let classDepth = 1;
+      for (let j = i + 1; j < lines.length && classDepth > 0; j++) {
+        const classLine = lines[j].trim();
+        if (classLine.includes('{')) classDepth++;
+        if (classLine.includes('}')) classDepth--;
+        
+        // Capture method signatures
+        if (classLine.match(/^(async\s+)?(private\s+|public\s+|protected\s+)?\w+\s*\(/) ||
+            classLine.match(/^constructor\s*\(/)) {
+          const methodSig = classLine.split('{')[0].trim();
+          signatures.push(`  ${methodSig} { /* ... */ }`);
+        }
+      }
+      signatures.push('}');
+      continue;
+    }
+    
+    // Capture React component declarations
+    if (trimmed.match(/^(export\s+)?(default\s+)?function\s+[A-Z]\w*/) ||
+        trimmed.match(/^(export\s+)?const\s+[A-Z]\w+\s*[=:]/)) {
+      const compMatch = trimmed.match(/^(.+?)\s*[{=(\n]/);
+      if (compMatch) {
+        signatures.push(`${compMatch[1]} { /* React Component */ }`);
+      }
+      continue;
+    }
+  }
+  
+  // Add file path context
+  const extension = filePath.split('.').pop() || '';
+  const fileType = getFileTypeLabel(extension);
+  
+  return `// ${fileType}: ${filePath}\n${signatures.join('\n')}`;
+}
+
+/**
+ * Get a human-readable label for file type
+ */
+function getFileTypeLabel(extension: string): string {
+  const labels: Record<string, string> = {
+    'tsx': 'React Component/Page',
+    'ts': 'TypeScript Module',
+    'jsx': 'React Component',
+    'js': 'JavaScript Module',
+    'py': 'Python Module',
+    'java': 'Java Class',
+    'cs': 'C# Class',
+    'go': 'Go Package',
+    'rs': 'Rust Module',
+    'md': 'Documentation',
+    'json': 'Configuration',
+    'yaml': 'Configuration',
+    'yml': 'Configuration',
+  };
+  return labels[extension] || 'Source File';
 }
 
 /**
@@ -258,10 +495,15 @@ export class IdentifyAbstractions extends Node<SharedData> {
     const language = shared.language ?? "english";
     const useCache = shared.use_cache ?? true;
     const maxAbs = shared.max_abstraction_num ?? 10;
+    const maxLinesPerFile = shared.max_lines_per_file ?? 150; // Default: 120 start + 30 end = 150 total
+    const documentationMode = shared.documentation_mode ?? 'tutorial'; // 'tutorial' or 'architecture'
     const customApiKey = shared.llm_api_key || shared.openai_api_key; // Get custom API key (prefer new, fallback to legacy)
     const llmProvider = shared.llm_provider || PROVIDER_IDS.OPENAI;
     const llmModel = shared.llm_model;
     const llmBaseUrl = shared.llm_base_url;
+    
+    // Get model context window dynamically (passed from API route)
+    const modelContextWindow = shared.model_context_window ?? 128000;
 
     if (!filesData || filesData.length === 0) {
       throw new Error(
@@ -275,11 +517,114 @@ export class IdentifyAbstractions extends Node<SharedData> {
     let context = "";
     const fileInfo: [number, string][] = []; // Store [index, path] tuples
 
+    // Calculate start/end line split (80% start, 20% end)
+    const maxStartLines = Math.floor(maxLinesPerFile * 0.8);
+    const maxEndLines = maxLinesPerFile - maxStartLines;
+
+    // Track original vs truncated sizes for logging
+    let originalTotalChars = 0;
+    let processedTotalChars = 0;
+    let filesWithTruncation = 0;
+
+    // Dynamic context limit based on model's context window
+    // Reserve ~15% for prompt overhead and ~15% for response, use 70% for file context
+    const CONTEXT_USAGE_RATIO = 0.70;
+    const MAX_CONTEXT_TOKENS = Math.floor(modelContextWindow * CONTEXT_USAGE_RATIO);
+    const CHARS_PER_TOKEN = 3.5;
+    const MAX_CONTEXT_CHARS = MAX_CONTEXT_TOKENS * CHARS_PER_TOKEN;
+    
+    console.log(`📊 Model context window: ${modelContextWindow.toLocaleString()} tokens (using ${MAX_CONTEXT_TOKENS.toLocaleString()} for file context)`);
+
     // Build the context string and file info list
+    // In architecture mode, use signature extraction for massive token reduction
+    // In tutorial mode, apply smart truncation to large files
+    
+    // First pass: process all files and calculate sizes
+    const processedFiles: { path: string; content: string; index: number; chars: number }[] = [];
+    
     filesData.forEach(([path, content], index) => {
-      context += `--- File Index ${index}: ${path} ---\n${content}\n\n`;
-      fileInfo.push([index, path]);
+      const originalLength = content.length;
+      let processedContent: string;
+      
+      if (documentationMode === 'architecture') {
+        // Architecture mode: extract only signatures, imports, exports, interfaces
+        processedContent = extractFileSignatures(content, path);
+      } else {
+        // Tutorial mode: use truncation
+        processedContent = truncateFileContent(content, maxStartLines, maxEndLines);
+      }
+      
+      const processedLength = processedContent.length;
+      
+      originalTotalChars += originalLength;
+      
+      if (processedLength < originalLength) {
+        filesWithTruncation++;
+      }
+      
+      processedFiles.push({
+        path,
+        content: processedContent,
+        index,
+        chars: processedLength,
+      });
     });
+    
+    // Sort files by importance for context limit (prioritize entry points and main files)
+    const priorityPatterns = [
+      /page\.(tsx?|jsx?)$/,
+      /index\.(tsx?|jsx?|ts|js|py)$/,
+      /main\.(tsx?|jsx?|ts|js|py)$/,
+      /app\.(tsx?|jsx?|ts|js|py)$/,
+      /route\.(tsx?|jsx?)$/,
+      /layout\.(tsx?|jsx?)$/,
+      /\/(api|lib|utils|components)\//,
+    ];
+    
+    processedFiles.sort((a, b) => {
+      const aScore = priorityPatterns.findIndex(p => p.test(a.path));
+      const bScore = priorityPatterns.findIndex(p => p.test(b.path));
+      // Higher priority (lower index or -1 becomes last) goes first
+      const aPriority = aScore === -1 ? 999 : aScore;
+      const bPriority = bScore === -1 ? 999 : bScore;
+      return aPriority - bPriority;
+    });
+    
+    // Second pass: build context respecting the token limit
+    let currentChars = 0;
+    let filesIncluded = 0;
+    let filesSkipped = 0;
+    
+    for (const file of processedFiles) {
+      const fileHeader = `--- File Index ${file.index}: ${file.path} ---\n`;
+      const fileEntry = fileHeader + file.content + '\n\n';
+      const entryChars = fileEntry.length;
+      
+      if (currentChars + entryChars <= MAX_CONTEXT_CHARS) {
+        context += fileEntry;
+        fileInfo.push([file.index, file.path]);
+        currentChars += entryChars;
+        processedTotalChars += file.chars;
+        filesIncluded++;
+      } else {
+        filesSkipped++;
+      }
+    }
+
+    // Log token savings and context limit info
+    const originalTokens = Math.ceil(originalTotalChars / 3.5);
+    const processedTokens = Math.ceil(processedTotalChars / 3.5);
+    const savedTokens = originalTokens - processedTokens;
+    const savingsPercent = originalTokens > 0 ? ((savedTokens / originalTokens) * 100).toFixed(1) : '0';
+    
+    const modeLabel = documentationMode === 'architecture' ? '🏗️ Architecture mode (signatures only)' : '📚 Tutorial mode (truncated)';
+    console.log(`${modeLabel}: ${filesWithTruncation}/${filesData.length} files processed`);
+    console.log(`📉 Token savings: ~${savedTokens.toLocaleString()} tokens saved (${savingsPercent}% reduction)`);
+    console.log(`📈 Context size: ~${processedTokens.toLocaleString()} tokens (was ~${originalTokens.toLocaleString()})`);
+    
+    if (filesSkipped > 0) {
+      console.log(`⚠️ Context limit: ${filesIncluded}/${processedFiles.length} files included, ${filesSkipped} files skipped to stay under ${MAX_CONTEXT_TOKENS.toLocaleString()} token limit`);
+    };
 
     // Create a formatted string listing files for the LLM prompt
     const fileListing = fileInfo
@@ -294,6 +639,7 @@ export class IdentifyAbstractions extends Node<SharedData> {
       language,
       useCache,
       maxAbs,
+      documentationMode,
       customApiKey,
       llmProvider,
       llmModel,
@@ -310,6 +656,7 @@ export class IdentifyAbstractions extends Node<SharedData> {
       language,
       useCache,
       maxAbs,
+      documentationMode,
       customApiKey,
       llmProvider,
       llmModel,
@@ -319,15 +666,19 @@ export class IdentifyAbstractions extends Node<SharedData> {
     // Get progress callback from shared
     const onProgress = this._shared?._onProgress;
     
+    const isArchitectureMode = documentationMode === 'architecture';
+    
     if (onProgress) {
       await onProgress({
         stage: 'abstractions',
-        message: 'Analyzing codebase and identifying key concepts...',
+        message: isArchitectureMode 
+          ? 'Analyzing architecture and identifying major subsystems...'
+          : 'Analyzing codebase and identifying key concepts...',
         progress: 15
       });
     }
     
-    console.log("Identifying abstractions using LLM...");
+    console.log(`Identifying abstractions using LLM (${documentationMode} mode)...`);
 
     // Determine language-specific instructions and hints
     const langCap =
@@ -341,7 +692,61 @@ export class IdentifyAbstractions extends Node<SharedData> {
     const descLangHint = langCap ? ` (value in ${langCap})` : "";
 
     // Construct the prompt for the LLM
-    const prompt = `
+    // Build prompt based on documentation mode
+    let prompt: string;
+    
+    if (isArchitectureMode) {
+      // Architecture mode: Focus on high-level structure and system understanding
+      prompt = `
+For the project \`${projectName}\`:
+
+Codebase Structure (signatures and interfaces):
+${context}
+
+${languageInstruction}Analyze this codebase to understand its **architecture and purpose**.
+
+Identify the top 3-${maxAbs} major **subsystems or architectural components** that define what this project does.
+
+For each subsystem, provide:
+1. A concise \`name\` that describes the subsystem${nameLangHint}.
+2. A high-level \`description\` explaining:
+   - What this subsystem's PURPOSE is (what problem it solves)
+   - How it fits into the overall architecture
+   - Key responsibilities (in around 80-100 words)${descLangHint}
+3. A list of relevant \`file_indices\` (integers) using the format \`idx # path/comment\`.
+
+Focus on:
+- Entry points (pages, routes, main files)
+- Core business logic flows
+- Data models and state management
+- External integrations (APIs, databases)
+
+List of file indices and paths present in the context:
+${fileListing}
+
+Format the output as a YAML list of dictionaries:
+
+\`\`\`yaml
+- name: |
+    User Interface Layer${nameLangHint}
+  description: |
+    Handles user interactions through React pages and components.
+    This is the entry point for users, rendering forms and displaying data.${descLangHint}
+  file_indices:
+    - 0 # src/app/page.tsx
+    - 3 # src/components/Form.tsx
+- name: |
+    Data Processing Pipeline${nameLangHint}
+  description: |
+    Core business logic that transforms and processes data.
+    Acts as the brain of the application, orchestrating workflows.${descLangHint}
+  file_indices:
+    - 5 # src/lib/processor.ts
+# ... up to ${maxAbs} subsystems
+\`\`\``;
+    } else {
+      // Tutorial mode: Focus on learning concepts step by step
+      prompt = `
 For the project \`${projectName}\`:
 
 Codebase Context:
@@ -377,6 +782,7 @@ Format the output as a YAML list of dictionaries:
     - 5 # path/to/another.js
 # ... up to ${maxAbs} abstractions
 \`\`\``;
+    }
 
     // Call the LLM with cache context and custom API key
     const response = await callLLM({ 
@@ -503,6 +909,7 @@ export class AnalyzeRelationships extends Node<SharedData> {
     const projectName = shared.project_name;
     const language = shared.language ?? "english";
     const useCache = shared.use_cache ?? true;
+    const maxLinesPerFile = shared.max_lines_per_file ?? 150;
     const customApiKey = shared.llm_api_key || shared.openai_api_key;
     const llmProvider = shared.llm_provider || PROVIDER_IDS.OPENAI;
     const llmModel = shared.llm_model;
@@ -534,10 +941,11 @@ export class AnalyzeRelationships extends Node<SharedData> {
 
     context += "\nRelevant File Snippets (Referenced by Index and Path):\n";
 
-    // Get content for all relevant files
-    const relevantFilesContentMap = getContentForIndices(
+    // Get content for all relevant files with truncation applied
+    const relevantFilesContentMap = getContentForIndicesTruncated(
       filesData,
-      [...allRelevantIndices].sort((a, b) => a - b)
+      [...allRelevantIndices].sort((a, b) => a - b),
+      maxLinesPerFile
     );
 
     // Add file snippets to the context
@@ -1056,6 +1464,7 @@ export class WriteChapters extends BatchNode<SharedData, WriteChapterItem> {
     const projectName = shared.project_name;
     const language = shared.language ?? "english";
     const useCache = shared.use_cache ?? true;
+    const maxLinesPerFile = shared.max_lines_per_file ?? 150;
     const customApiKey = shared.llm_api_key || shared.openai_api_key;
     const llmProvider = shared.llm_provider || PROVIDER_IDS.OPENAI;
     const llmModel = shared.llm_model;
@@ -1130,9 +1539,10 @@ export class WriteChapters extends BatchNode<SharedData, WriteChapterItem> {
 
       const abstractionDetails = abstractions[abstractionIndex];
       const relatedFileIndices = abstractionDetails.files ?? [];
-      const relatedFilesContentMap = getContentForIndices(
+      const relatedFilesContentMap = getContentForIndicesTruncated(
         filesData,
-        relatedFileIndices
+        relatedFileIndices,
+        maxLinesPerFile
       );
 
       const prevChapterIndex = i > 0 ? chapterOrder[i - 1] : -1;
@@ -1459,6 +1869,7 @@ export class CombineTutorial extends Node<SharedData> {
     const chapterOrder = shared.chapter_order;
     const abstractions = shared.abstractions;
     const chaptersContent = shared.chapters; // List of Markdown strings
+    const documentationMode = shared.documentation_mode ?? 'tutorial';
     const fileExt = '.md';
 
     if (!projectName)
@@ -1479,61 +1890,146 @@ export class CombineTutorial extends Node<SharedData> {
     }
 
     const outputPath = path.join(outputBaseDir, projectName);
+    const isArchitectureMode = documentationMode === 'architecture';
 
     // --- Generate Mermaid Diagram ---
-    const mermaidLines: string[] = ["flowchart TD"];
-    const nodeMap: Record<number, string> = {}; // Map abstraction index to Mermaid node ID
+    let mermaidDiagram: string;
+    
+    if (isArchitectureMode) {
+      // Architecture mode: Generate a more comprehensive system diagram
+      const mermaidLines: string[] = ["flowchart TB"];
+      const nodeMap: Record<number, string> = {};
+      
+      // Add subgraph groupings based on file paths
+      const subsystems = new Map<string, number[]>();
+      abstractions.forEach((abs, index) => {
+        // Group by common path prefix
+        const files = abs.files || [];
+        let category = 'Core';
+        if (files.length > 0) {
+          const firstFile = shared.files?.[files[0]]?.[0] || '';
+          if (firstFile.includes('/app/')) category = 'UI Layer';
+          else if (firstFile.includes('/api/')) category = 'API Layer';
+          else if (firstFile.includes('/lib/')) category = 'Core Logic';
+          else if (firstFile.includes('/components/')) category = 'Components';
+        }
+        if (!subsystems.has(category)) subsystems.set(category, []);
+        subsystems.get(category)!.push(index);
+      });
+      
+      // Add nodes with styling
+      abstractions.forEach((abs, index) => {
+        const nodeId = `A${index}`;
+        nodeMap[index] = nodeId;
+        const sanitizedName = abs.name.replace(/"/g, "").replace(/\n/g, " ");
+        mermaidLines.push(`    ${nodeId}["🔹 ${sanitizedName}"]`);
+      });
+      
+      // Add edges with relationship types
+      relationshipsData.details.forEach((rel) => {
+        const fromNodeId = nodeMap[rel.from];
+        const toNodeId = nodeMap[rel.to];
+        if (!fromNodeId || !toNodeId) return;
+        
+        let edgeLabel = rel.label.replace(/"/g, "").replace(/\n/g, " ");
+        const maxLabelLen = 25;
+        if (edgeLabel.length > maxLabelLen) {
+          edgeLabel = edgeLabel.substring(0, maxLabelLen - 3) + "...";
+        }
+        
+        // Use different arrow styles based on relationship type
+        const edgeStyle = edgeLabel.toLowerCase().includes('uses') ? '-->' 
+          : edgeLabel.toLowerCase().includes('extends') ? '-.->|extends|'
+          : edgeLabel.toLowerCase().includes('implements') ? '-.->|impl|'
+          : `-->|${edgeLabel}|`;
+          
+        if (edgeStyle.includes('|')) {
+          mermaidLines.push(`    ${fromNodeId} ${edgeStyle} ${toNodeId}`);
+        } else {
+          mermaidLines.push(`    ${fromNodeId} -- "${edgeLabel}" --> ${toNodeId}`);
+        }
+      });
+      
+      // Add styling
+      mermaidLines.push('');
+      mermaidLines.push('    %% Styling');
+      mermaidLines.push('    classDef default fill:#f9f9f9,stroke:#333,stroke-width:1px');
+      
+      mermaidDiagram = mermaidLines.join("\n");
+    } else {
+      // Tutorial mode: Simple flowchart
+      const mermaidLines: string[] = ["flowchart TD"];
+      const nodeMap: Record<number, string> = {};
 
-    // Add nodes
-    abstractions.forEach((abs, index) => {
-      const nodeId = `A${index}`;
-      nodeMap[index] = nodeId;
-      // Sanitize potentially translated name for Mermaid ID and label
-      const sanitizedName = abs.name.replace(/"/g, ""); // Basic quote removal
-      const nodeLabel = sanitizedName; // Keep label potentially translated
-      mermaidLines.push(`    ${nodeId}["${nodeLabel}"]`); // Node label uses potentially translated name
-    });
+      // Add nodes
+      abstractions.forEach((abs, index) => {
+        const nodeId = `A${index}`;
+        nodeMap[index] = nodeId;
+        const sanitizedName = abs.name.replace(/"/g, "");
+        mermaidLines.push(`    ${nodeId}["${sanitizedName}"]`);
+      });
 
-    // Add edges
-    relationshipsData.details.forEach((rel) => {
-      const fromNodeId = nodeMap[rel.from];
-      const toNodeId = nodeMap[rel.to];
-      if (!fromNodeId || !toNodeId) {
-        console.warn(
-          `Skipping Mermaid edge due to missing node for relationship: ${rel.from} -> ${rel.to}`
-        );
-        return;
-      }
-      // Sanitize potentially translated label
-      let edgeLabel = rel.label.replace(/"/g, "").replace(/\n/g, " "); // Remove quotes, newlines
-      const maxLabelLen = 30;
-      if (edgeLabel.length > maxLabelLen) {
-        edgeLabel = edgeLabel.substring(0, maxLabelLen - 3) + "...";
-      }
-      mermaidLines.push(`    ${fromNodeId} -- "${edgeLabel}" --> ${toNodeId}`); // Edge label uses potentially translated label
-    });
+      // Add edges
+      relationshipsData.details.forEach((rel) => {
+        const fromNodeId = nodeMap[rel.from];
+        const toNodeId = nodeMap[rel.to];
+        if (!fromNodeId || !toNodeId) {
+          console.warn(
+            `Skipping Mermaid edge due to missing node for relationship: ${rel.from} -> ${rel.to}`
+          );
+          return;
+        }
+        let edgeLabel = rel.label.replace(/"/g, "").replace(/\n/g, " ");
+        const maxLabelLen = 30;
+        if (edgeLabel.length > maxLabelLen) {
+          edgeLabel = edgeLabel.substring(0, maxLabelLen - 3) + "...";
+        }
+        mermaidLines.push(`    ${fromNodeId} -- "${edgeLabel}" --> ${toNodeId}`);
+      });
 
-    const mermaidDiagram = mermaidLines.join("\n");
+      mermaidDiagram = mermaidLines.join("\n");
+    }
     // --- End Mermaid ---
 
     // --- Prepare index content ---
     const indexFilename = `index${fileExt}`;
-    let indexContent = `# Tutorial: ${projectName}\n\n`;
+    let indexContent = '';
     
-    indexContent += `${relationshipsData.summary}\n\n`; // Use potentially translated summary
+    if (isArchitectureMode) {
+      // Architecture mode: Create a high-level overview document
+      indexContent = `# ${projectName} - Architecture Overview\n\n`;
+      indexContent += `> High-level documentation of the project's architecture and design.\n\n`;
+      
+      // Add source repo link
+      if (repoUrl) {
+        indexContent += `**📦 Repository:** [${repoUrl}](${repoUrl})\n\n`;
+      }
+      
+      indexContent += `## 🎯 Project Purpose\n\n`;
+      indexContent += `${relationshipsData.summary}\n\n`;
+      
+      indexContent += `## 🏗️ System Architecture\n\n`;
+      indexContent += `The following diagram shows the major subsystems and their relationships:\n\n`;
+      indexContent += "```mermaid\n";
+      indexContent += mermaidDiagram + "\n";
+      indexContent += "```\n\n";
+      
+      indexContent += `## 📚 Subsystem Details\n\n`;
+      indexContent += `Click on each subsystem below for detailed documentation:\n\n`;
+    } else {
+      // Tutorial mode: Standard tutorial index
+      indexContent = `# Tutorial: ${projectName}\n\n`;
+      indexContent += `${relationshipsData.summary}\n\n`;
 
-    // Add source repo link if available (fixed English string)
-    if (repoUrl) {
-      indexContent += `**Source Repository:** [${repoUrl}](${repoUrl})\n\n`;
+      if (repoUrl) {
+        indexContent += `**Source Repository:** [${repoUrl}](${repoUrl})\n\n`;
+      }
+
+      indexContent += "```mermaid\n";
+      indexContent += mermaidDiagram + "\n";
+      indexContent += "```\n\n";
+      indexContent += `## Chapters\n\n`;
     }
-
-    // Add Mermaid diagram (diagram uses potentially translated names/labels)
-    indexContent += "```mermaid\n";
-    indexContent += mermaidDiagram + "\n";
-    indexContent += "```\n\n";
-
-    // Add Chapters section header (fixed English string)
-    indexContent += `## Chapters\n\n`;
 
     const chapterFilesData: { filename: string; title: string; content: string }[] = [];
     const numChaptersToProcess = Math.min(
@@ -1551,7 +2047,7 @@ export class CombineTutorial extends Node<SharedData> {
         continue;
       }
 
-      const abstractionName = abstractions[abstractionIndex].name; // Potentially translated
+      const abstractionName = abstractions[abstractionIndex].name;
       const chapterNum = i + 1;
       const filename = createSafeFilename(abstractionName, chapterNum);
 

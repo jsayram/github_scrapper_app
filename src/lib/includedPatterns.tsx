@@ -54,11 +54,14 @@ export const includedPatternCategories: PatternCategory[] = [
   {
     label: "Documentation",
     pattern: [
+      "**/*.md",
+      "**/*.mdx",
+      "**/*.markdown",
       "**/*.txt",
       "**/*.rst", 
       "**/*.adoc"
     ],
-    description: "Plain text documentation files"
+    description: "Markdown and plain text documentation files"
   },
   {
     label: "Mobile Development",

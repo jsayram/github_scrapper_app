@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { runTutorialFlowWithProgress, type ProgressCallback } from '@/lib/tutorialFlow';
-import { PROVIDER_IDS } from '@/lib/constants/llm';
+import { PROVIDER_IDS, getModelContextWindow } from '@/lib/constants/llm';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -49,6 +49,7 @@ export async function POST(request: NextRequest) {
         llm_base_url,
         regeneration_mode,
         force_full_regeneration = false,
+        documentation_mode = 'tutorial', // 'tutorial' or 'architecture'
       } = payload;
 
       // Validate inputs
@@ -97,6 +98,9 @@ export async function POST(request: NextRequest) {
         llm_base_url,
         force_full_regeneration,
         requested_regeneration_mode: regeneration_mode,
+        documentation_mode, // 'tutorial' or 'architecture'
+        // Dynamic context window based on model
+        model_context_window: llm_model ? getModelContextWindow(llm_model) : 128000,
       };
 
       // Progress callback for streaming updates

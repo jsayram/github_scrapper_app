@@ -577,6 +577,7 @@ export async function callLLM({
     }
     
     // Check for token limit errors first (specific handling with helpful message)
+    // This includes TPM (tokens per minute) rate limit errors which indicate request is too large
     const tokenLimitPatterns = [
       /Input tokens exceed the configured limit of (\d+) tokens.*resulted in (\d+) tokens/i,
       /maximum context length is (\d+)/i,
@@ -584,21 +585,36 @@ export async function callLLM({
       /token.*limit.*exceeded/i,
       /request too large/i,
       /payload too large/i,
+      /tokens per min.*TPM.*Limit (\d+).*Requested (\d+)/i, // OpenAI TPM error
+      /TPM.*Limit.*Requested/i,
     ];
     
     for (const pattern of tokenLimitPatterns) {
       if (pattern.test(err.message || '') || pattern.test(errorDetails)) {
-        // Extract token numbers if available
-        const limitMatch = (err.message || '').match(/limit of (\d+) tokens/i) || errorDetails.match(/limit of (\d+) tokens/i);
-        const requestedMatch = (err.message || '').match(/resulted in (\d+) tokens/i) || errorDetails.match(/resulted in (\d+) tokens/i);
+        // Extract token numbers if available (try multiple patterns)
+        let limit: number | null = null;
+        let requested: number | null = null;
         
-        const limit = limitMatch ? parseInt(limitMatch[1], 10) : null;
-        const requested = requestedMatch ? parseInt(requestedMatch[1], 10) : null;
+        // Pattern 1: "Limit X, Requested Y" (TPM format)
+        const tpmMatch = (err.message || '').match(/Limit (\d+).*Requested (\d+)/i) || 
+                         errorDetails.match(/Limit (\d+).*Requested (\d+)/i);
+        if (tpmMatch) {
+          limit = parseInt(tpmMatch[1], 10);
+          requested = parseInt(tpmMatch[2], 10);
+        }
+        
+        // Pattern 2: "limit of X tokens...resulted in Y tokens"
+        if (!limit) {
+          const limitMatch = (err.message || '').match(/limit of (\d+) tokens/i) || errorDetails.match(/limit of (\d+) tokens/i);
+          const requestedMatch = (err.message || '').match(/resulted in (\d+) tokens/i) || errorDetails.match(/resulted in (\d+) tokens/i);
+          if (limitMatch) limit = parseInt(limitMatch[1], 10);
+          if (requestedMatch) requested = parseInt(requestedMatch[1], 10);
+        }
         
         let suggestion = 'Try reducing the number of files or use a model with a larger context window.';
         if (limit && requested) {
           const reductionNeeded = Math.ceil(((requested - limit) / requested) * 100);
-          suggestion = `You need to reduce content by ~${reductionNeeded}%. Try removing ${Math.ceil((requested - limit) / 1000)} files or switching to a larger model (e.g., Gemini 2.5 Flash with 1M tokens).`;
+          suggestion = `You need to reduce content by ~${reductionNeeded}%. Try removing ${Math.ceil((requested - limit) / 1000)}k tokens worth of files or switching to a larger model (e.g., Gemini 2.5 Flash with 1M tokens).`;
         }
         
         throw new Error(
@@ -630,6 +646,7 @@ export async function callLLM({
         `Please add credits to your account or check your billing settings.`
       );
     } else if (err.status === 429 || err.message?.includes('rate_limit') || err.message?.includes('too many requests')) {
+      // Only show generic rate limit message if it's not a token limit issue (already handled above)
       throw new Error(
         `⏳ ${providerName} rate limit exceeded. ` +
         `Please wait a moment and try again.`

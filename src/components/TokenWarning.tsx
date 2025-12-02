@@ -19,6 +19,8 @@ interface TokenWarningProps {
   providerId: string;
   /** Current model ID */
   modelId: string;
+  /** Documentation mode - architecture mode uses ~80% fewer tokens */
+  documentationMode?: 'tutorial' | 'architecture';
   /** Callback when user changes token limit */
   onTokenLimitChange?: (newLimit: number) => void;
   /** Callback when user wants to change model */
@@ -35,6 +37,7 @@ export function TokenWarning({
   files,
   providerId,
   modelId,
+  documentationMode = 'architecture',
   onTokenLimitChange,
   onModelSuggestionClick,
   customContextWindow,
@@ -50,8 +53,9 @@ export function TokenWarning({
     if (!files.length) return null;
     return estimateTokensForFiles(files, providerId, modelId, {
       customContextWindow,
+      documentationMode,
     });
-  }, [files, providerId, modelId, customContextWindow]);
+  }, [files, providerId, modelId, customContextWindow, documentationMode]);
   
   // Get model suggestions if over limit
   const suggestions = useMemo(() => {

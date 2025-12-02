@@ -213,8 +213,8 @@ const ActionButtons: React.FC<ActionButtonsProps> = ({
         </div>
       )}
 
-      {/* Versions Panel */}
-      {showVersions && hasFiles && (
+      {/* Versions Panel - always show when toggled, even without files loaded */}
+      {showVersions && (
         <div className="animate-in slide-in-from-top-2 duration-200">
           <SaveToFile
             files={files}

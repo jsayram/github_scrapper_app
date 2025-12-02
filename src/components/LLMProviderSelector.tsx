@@ -26,7 +26,35 @@ import { loadPreferences, savePreferences, setRememberChoice } from '@/lib/llmPr
 import {
   PROVIDER_IDS,
   OPENAI_MODELS,
+  getModelContextWindow,
 } from '@/lib/constants/llm';
+
+// Helper function to format context window size
+function formatContextWindow(tokens: number): string {
+  if (tokens >= 1000000) {
+    return `${(tokens / 1000000).toFixed(tokens % 1000000 === 0 ? 0 : 1)}M tokens`;
+  } else if (tokens >= 1000) {
+    return `${(tokens / 1000).toFixed(tokens % 1000 === 0 ? 0 : 1)}K tokens`;
+  }
+  return `${tokens} tokens`;
+}
+
+// Helper function to describe context window capacity
+function getContextWindowDescription(tokens: number): string {
+  // Rough estimates: 1 token ≈ 4 characters, 1 line ≈ 80 chars
+  const chars = tokens * 4;
+  const lines = Math.floor(chars / 80);
+  const pages = Math.floor(lines / 50); // ~50 lines per page
+  
+  if (tokens >= 1000000) {
+    return `≈ ${Math.floor(pages / 1000)}K+ pages of code`;
+  } else if (tokens >= 100000) {
+    return `≈ ${Math.floor(pages)} pages of code`;
+  } else if (tokens >= 10000) {
+    return `≈ ${Math.floor(pages)} pages`;
+  }
+  return `≈ ${lines.toLocaleString()} lines`;
+}
 
 interface LLMProviderSelectorProps {
   onProviderChange: (providerId: string, modelId: string, apiKey?: string, baseUrl?: string) => void;
@@ -364,9 +392,20 @@ export function LLMProviderSelector({
             Enter the exact model ID from your provider
           </p>
         ) : selectedModel && (
-          <p className="text-xs text-gray-500 dark:text-gray-400">
-            {availableModels.find(m => m.id === selectedModel)?.description}
-          </p>
+          <div className="space-y-1">
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              {availableModels.find(m => m.id === selectedModel)?.description}
+            </p>
+            {/* Context Window Display */}
+            <div className="flex items-center gap-2 text-xs">
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">
+                📊 {formatContextWindow(getModelContextWindow(selectedModel))} context
+              </span>
+              <span className="text-gray-400 dark:text-gray-500">
+                {getContextWindowDescription(getModelContextWindow(selectedModel))}
+              </span>
+            </div>
+          </div>
         )}
       </div>
 

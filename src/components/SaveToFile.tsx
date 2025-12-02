@@ -14,6 +14,7 @@ export interface VersionInfo {
   timestamp: string;
   repository: string;
   fileCount: number;
+  documentationType?: 'architecture' | 'tutorial'; // Set if this is auto-saved documentation
 }
 
 export default function SaveToFile({ files, repoUrl, onLoadVersion }: SaveToFileProps) {
@@ -31,7 +32,39 @@ export default function SaveToFile({ files, repoUrl, onLoadVersion }: SaveToFile
     try {
       const versions = localStorage.getItem('savedRepoVersions');
       if (versions) {
-        setSavedVersions(JSON.parse(versions));
+        // Load basic info, then enrich with documentationType from each version's data
+        const basicVersions: VersionInfo[] = JSON.parse(versions);
+        const enrichedVersions = basicVersions.map(v => {
+          try {
+            const versionData = localStorage.getItem(`repoVersion-${v.id}`);
+            if (versionData) {
+              const parsed = JSON.parse(versionData);
+              
+              // Check if documentationType is explicitly set
+              if (parsed.documentationType) {
+                return { ...v, documentationType: parsed.documentationType };
+              }
+              
+              // Auto-detect documentation by checking file structure
+              // Documentation versions have files like index.md, 01_xxx.md, 02_xxx.md
+              const files = parsed.files || {};
+              const fileNames = Object.keys(files);
+              const hasIndexMd = fileNames.includes('index.md');
+              const hasNumberedMdFiles = fileNames.some(f => /^\d{2}_.*\.md$/.test(f));
+              const allAreMdFiles = fileNames.length > 0 && fileNames.every(f => f.endsWith('.md'));
+              
+              if (hasIndexMd && hasNumberedMdFiles && allAreMdFiles) {
+                // This looks like documentation - detect type from name or default to tutorial
+                const isArchitecture = v.name.toLowerCase().includes('architecture');
+                return { ...v, documentationType: isArchitecture ? 'architecture' : 'tutorial' as const };
+              }
+            }
+          } catch {
+            // Ignore errors for individual versions
+          }
+          return v;
+        });
+        setSavedVersions(enrichedVersions);
       }
     } catch (error) {
       console.error('Error loading saved versions:', error);
@@ -110,7 +143,8 @@ export default function SaveToFile({ files, repoUrl, onLoadVersion }: SaveToFile
           name: parsedData.name,
           timestamp: parsedData.timestamp,
           repository: parsedData.repository,
-          fileCount: parsedData.fileCount
+          fileCount: parsedData.fileCount,
+          documentationType: parsedData.documentationType, // Pass doc type if present
         });
       }
     } catch (error) {
@@ -210,48 +244,85 @@ export default function SaveToFile({ files, repoUrl, onLoadVersion }: SaveToFile
           </div>
         ) : (
           <div className="space-y-2 max-h-64 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600">
-            {savedVersions.slice().reverse().map(version => (
-              <div 
-                key={version.id} 
-                className="group flex items-center gap-3 p-3 border dark:border-gray-700 rounded-lg hover:bg-purple-50 dark:hover:bg-purple-900/20 cursor-pointer transition-colors"
-                onClick={() => loadVersion(version.id)}
-              >
-                <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center">
-                  <svg className="h-5 w-5 text-purple-600 dark:text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                  </svg>
-                </div>
-                
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-gray-900 dark:text-gray-100 truncate">
-                      {version.name}
-                    </span>
-                    <span className="flex-shrink-0 px-2 py-0.5 text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 rounded">
-                      {version.fileCount} files
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                    <span>{formatDate(version.timestamp)}</span>
-                    <span>•</span>
-                    <span className="truncate" title={version.repository}>
-                      {version.repository.replace('https://github.com/', '')}
-                    </span>
-                  </div>
-                </div>
-                
-                <button
-                  type="button"
-                  onClick={(e) => deleteVersion(version.id, e)}
-                  className="flex-shrink-0 p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
-                  title="Delete version"
+            {savedVersions.slice().reverse().map(version => {
+              const isDocumentation = !!version.documentationType;
+              const docTypeLabel = version.documentationType === 'architecture' ? '🏗️ Architecture' : '📚 Tutorial';
+              
+              return (
+                <div 
+                  key={version.id} 
+                  className={`group flex items-center gap-3 p-3 border rounded-lg cursor-pointer transition-colors ${
+                    isDocumentation 
+                      ? 'border-green-200 dark:border-green-800 hover:bg-green-50 dark:hover:bg-green-900/20'
+                      : 'dark:border-gray-700 hover:bg-purple-50 dark:hover:bg-purple-900/20'
+                  }`}
+                  onClick={() => loadVersion(version.id)}
                 >
-                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                </button>
-              </div>
-            ))}
+                  <div className={`flex-shrink-0 w-10 h-10 rounded-lg flex items-center justify-center ${
+                    isDocumentation 
+                      ? 'bg-green-100 dark:bg-green-900/30'
+                      : 'bg-purple-100 dark:bg-purple-900/30'
+                  }`}>
+                    {isDocumentation ? (
+                      <svg className="h-5 w-5 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+                      </svg>
+                    ) : (
+                      <svg className="h-5 w-5 text-purple-600 dark:text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                    )}
+                  </div>
+                  
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium text-gray-900 dark:text-gray-100 truncate">
+                        {version.name}
+                      </span>
+                      {isDocumentation ? (
+                        <span className="flex-shrink-0 px-2 py-0.5 text-xs bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300 rounded-full font-medium">
+                          {docTypeLabel}
+                        </span>
+                      ) : (
+                        <span className="flex-shrink-0 px-2 py-0.5 text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 rounded">
+                          {version.fileCount} files
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                      <span>{formatDate(version.timestamp)}</span>
+                      {isDocumentation && (
+                        <>
+                          <span>•</span>
+                          <span className="text-green-600 dark:text-green-400">
+                            {version.fileCount} chapters • Click to view
+                          </span>
+                        </>
+                      )}
+                      {!isDocumentation && (
+                        <>
+                          <span>•</span>
+                          <span className="truncate" title={version.repository}>
+                            {version.repository.replace('https://github.com/', '')}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  
+                  <button
+                    type="button"
+                    onClick={(e) => deleteVersion(version.id, e)}
+                    className="flex-shrink-0 p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
+                    title="Delete version"
+                  >
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>

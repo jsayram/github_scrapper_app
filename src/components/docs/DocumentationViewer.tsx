@@ -8,6 +8,7 @@ import remarkGfm from 'remark-gfm';
 import JSZip from 'jszip';
 import { Callout } from './Callout';
 import { CodeBlock } from './CodeBlock';
+import { MermaidDiagram } from './MermaidDiagram';
 
 interface TocItem {
   id: string;
@@ -227,14 +228,7 @@ export const DocumentationViewer: React.FC<DocumentationViewerProps> = ({
             // Handle mermaid diagrams
             if (match?.[1] === 'mermaid') {
               return (
-                <div className="my-4 p-4 bg-muted rounded-lg overflow-x-auto">
-                  <pre className="text-sm">
-                    <code className="text-muted-foreground">{String(children).trim()}</code>
-                  </pre>
-                  <p className="text-xs text-muted-foreground mt-2 italic">
-                    (Mermaid diagram - view in a Mermaid-compatible renderer)
-                  </p>
-                </div>
+                <MermaidDiagram chart={String(children).trim()} />
               );
             }
             

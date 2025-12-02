@@ -229,18 +229,6 @@ export const excludedPatternCategories: PatternCategory[] = [
     reason: "CI/CD configuration that doesn't contain application logic"
   },
   {
-    label: "Documentation",
-    pattern: [
-      "**/docs/**",
-      "**/doc/**",
-      "**/*.md",
-      "**/*.mdx",
-      "**/*.markdown"
-    ],
-    required: false,
-    reason: "Written documentation that explains but doesn't implement functionality"
-  },
-  {
     label: "TypeScript Maps",
     pattern: [
       "**/*.js.map",

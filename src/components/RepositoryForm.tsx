@@ -12,6 +12,7 @@ export interface LLMConfig {
   apiKey?: string;
   baseUrl?: string;
   regenerationMode?: 'full' | 'partial' | 'skip';
+  documentationMode?: 'tutorial' | 'architecture';
 }
 
 interface RepositoryFormProps {
@@ -48,6 +49,7 @@ const RepositoryForm: React.FC<RepositoryFormProps> = ({
   const [internalLLMConfig, setInternalLLMConfig] = useState<LLMConfig>({
     providerId: PROVIDER_IDS.OPENAI,
     modelId: OPENAI_MODELS.GPT_4O_MINI,
+    documentationMode: 'architecture',
   });
   
   // Use external config if provided, otherwise use internal
@@ -81,6 +83,16 @@ const RepositoryForm: React.FC<RepositoryFormProps> = ({
 
   const handleRegenerationModeSelect = useCallback((mode: 'full' | 'partial' | 'skip') => {
     const newConfig: LLMConfig = { ...currentConfig, regenerationMode: mode };
+    
+    if (onLLMConfigChange) {
+      onLLMConfigChange(newConfig);
+    } else {
+      setInternalLLMConfig(newConfig);
+    }
+  }, [currentConfig, onLLMConfigChange]);
+
+  const handleConfigChange = useCallback((updates: Partial<LLMConfig>) => {
+    const newConfig: LLMConfig = { ...currentConfig, ...updates };
     
     if (onLLMConfigChange) {
       onLLMConfigChange(newConfig);
@@ -156,6 +168,25 @@ const RepositoryForm: React.FC<RepositoryFormProps> = ({
             Choose your AI provider and model
           </span>
         </h3>
+        
+        {/* Documentation Mode Dropdown */}
+        <div className="mb-4 p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+          <label htmlFor="documentationMode" className="text-sm font-medium mb-2 block">📄 Documentation Type</label>
+          <select
+            id="documentationMode"
+            value={currentConfig.documentationMode || 'architecture'}
+            onChange={(e) => handleConfigChange({ documentationMode: e.target.value as 'tutorial' | 'architecture' })}
+            className="w-full p-2 border rounded-md dark:bg-gray-700 dark:border-gray-600 text-sm"
+          >
+            <option value="architecture">🏗️ Architecture - High-level overview with Mermaid diagrams</option>
+            <option value="tutorial">📚 Tutorial - Step-by-step learning guide</option>
+          </select>
+          {(currentConfig.documentationMode || 'architecture') === 'architecture' && (
+            <p className="mt-2 text-xs text-purple-600 dark:text-purple-400">
+              ✨ Architecture mode uses signature extraction for ~80% fewer tokens
+            </p>
+          )}
+        </div>
         
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Provider Selector */}

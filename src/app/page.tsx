@@ -42,6 +42,7 @@ export default function Home() {
   const [llmConfig, setLLMConfig] = useState<LLMConfig>({
     providerId: PROVIDER_IDS.OPENAI,
     modelId: OPENAI_MODELS.GPT_4O_MINI,
+    documentationMode: 'architecture',
   });
   
   const [files, setFiles] = useState<Record<string, string>>({});
@@ -95,6 +96,68 @@ export default function Home() {
   // Use the custom hook for notifications
   const { notifications, showNotification, dismissNotification } =
     useNotifications();
+
+  // Auto-save documentation to versions when generation completes
+  const autoSaveDocumentation = (
+    chapters: { filename: string; title: string; content: string }[],
+    indexContent: string,
+    projectName: string,
+    mode: 'architecture' | 'tutorial'
+  ) => {
+    try {
+      // Convert chapters to files format
+      const docsFiles: Record<string, string> = {};
+      
+      // Add index file
+      if (indexContent) {
+        docsFiles['index.md'] = indexContent;
+      }
+      
+      // Add each chapter as a file
+      chapters.forEach((chapter) => {
+        docsFiles[chapter.filename] = chapter.content;
+      });
+      
+      // Generate version info
+      const versionId = `docs-${Date.now().toString(36)}`;
+      const modeLabel = mode === 'architecture' ? 'Architecture' : 'Tutorial';
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const versionName = `${modeLabel}-${projectName}-${dateStr}`;
+      
+      const versionInfo: VersionInfo = {
+        id: versionId,
+        name: versionName,
+        timestamp: new Date().toISOString(),
+        repository: repoUrl,
+        fileCount: Object.keys(docsFiles).length,
+      };
+      
+      const dataToSave = {
+        ...versionInfo,
+        files: docsFiles,
+        documentationType: mode, // Extra metadata for documentation type
+      };
+      
+      // Load existing versions
+      const existingVersions = localStorage.getItem('savedRepoVersions');
+      const versions: VersionInfo[] = existingVersions ? JSON.parse(existingVersions) : [];
+      
+      // Add new version
+      versions.push(versionInfo);
+      localStorage.setItem('savedRepoVersions', JSON.stringify(versions));
+      localStorage.setItem(`repoVersion-${versionId}`, JSON.stringify(dataToSave));
+      
+      console.log(`[AutoSave] Documentation auto-saved as "${versionName}"`);
+      showNotification(
+        "success",
+        "Documentation auto-saved",
+        `Saved as "${versionName}" with ${Object.keys(docsFiles).length} files`
+      );
+    } catch (error) {
+      console.error('[AutoSave] Failed to auto-save documentation:', error);
+      // Don't show error notification - auto-save is a convenience feature
+    }
+  };
 
   // Load token from env if available
   useEffect(() => {
@@ -362,6 +425,8 @@ export default function Home() {
         // Regeneration mode for partial cache usage
         regeneration_mode: llmConfig.regenerationMode || undefined,
         force_full_regeneration: llmConfig.regenerationMode === 'full',
+        // Documentation mode: 'tutorial' or 'architecture'
+        documentation_mode: llmConfig.documentationMode || 'tutorial',
         // Legacy: also pass openai_api_key for backward compatibility
         openai_api_key: llmConfig.apiKey || openaiApiKey || undefined,
       };
@@ -432,13 +497,25 @@ export default function Home() {
                 
                 // Store the result for the viewer
                 if (data.result?.generatedChapters) {
+                  const projectName = data.result.projectName || repoUrl.split("/").pop()?.replace(/\.git$/, "") || "Tutorial";
+                  const chapters = data.result.generatedChapters;
+                  const indexContent = data.result.generatedIndex || '';
+                  
                   setTutorialResult({
-                    chapters: data.result.generatedChapters,
-                    indexContent: data.result.generatedIndex || '',
-                    projectName: data.result.projectName || repoUrl.split("/").pop()?.replace(/\.git$/, "") || "Tutorial",
+                    chapters,
+                    indexContent,
+                    projectName,
                   });
                   // Show the viewer automatically
                   setShowTutorialViewer(true);
+                  
+                  // Auto-save the documentation to versions
+                  autoSaveDocumentation(
+                    chapters,
+                    indexContent,
+                    projectName,
+                    llmConfig.documentationMode
+                  );
                 }
               }
               
@@ -500,6 +577,62 @@ export default function Home() {
     if (versionInfo.repository !== repoUrl) {
       setRepoUrl(versionInfo.repository);
     }
+    
+    // Auto-detect documentation by checking file structure if not explicitly set
+    const fileNames = Object.keys(versionFiles);
+    const hasIndexMd = fileNames.includes('index.md');
+    const hasNumberedMdFiles = fileNames.some(f => /^\d{2}_.*\.md$/.test(f));
+    const allAreMdFiles = fileNames.length > 0 && fileNames.every(f => f.endsWith('.md'));
+    
+    const isDocumentation = versionInfo.documentationType || (hasIndexMd && hasNumberedMdFiles && allAreMdFiles);
+    
+    // If this is a documentation version, show the viewer immediately
+    if (isDocumentation) {
+      // Convert files back to chapters format
+      const chapters: { filename: string; title: string; content: string }[] = [];
+      let indexContent = '';
+      
+      Object.entries(versionFiles).forEach(([filename, content]) => {
+        if (filename === 'index.md') {
+          indexContent = content;
+        } else {
+          // Extract title from first heading or filename
+          const titleMatch = content.match(/^#\s+(.+)$/m);
+          const title = titleMatch 
+            ? titleMatch[1] 
+            : filename.replace(/^\d+_/, '').replace(/\.md$/, '').replace(/_/g, ' ');
+          
+          chapters.push({
+            filename,
+            title,
+            content,
+          });
+        }
+      });
+      
+      // Sort chapters by filename (they should be numbered like 01_xxx.md)
+      chapters.sort((a, b) => a.filename.localeCompare(b.filename));
+      
+      // Extract project name from version name (e.g., "Architecture-ProjectName-2025-12-01")
+      const projectName = versionInfo.name
+        .replace(/^(Architecture|Tutorial)-/, '')
+        .replace(/-\d{4}-\d{2}-\d{2}$/, '')
+        || 'Documentation';
+      
+      // Set tutorial result and show viewer
+      setTutorialResult({
+        chapters,
+        indexContent,
+        projectName,
+      });
+      setShowTutorialViewer(true);
+      
+      showNotification(
+        "success",
+        "Documentation loaded",
+        `Showing ${chapters.length} chapters from "${versionInfo.name}"`
+      );
+    }
   };
 
   return (
@@ -550,19 +683,7 @@ export default function Home() {
             totalChars={totalChars}
           />
 
-          {/* Filter section */}
-          <FilterSection
-            showFilters={showFilters}
-            setShowFilters={setShowFilters}
-            showExcludePatterns={showExcludePatterns}
-            setShowExcludePatterns={setShowExcludePatterns}
-            includePatterns={includePatterns}
-            setIncludePatterns={setIncludePatterns}
-            excludePatterns={excludePatterns}
-            setExcludePatterns={setExcludePatterns}
-          />
-
-          {/* Action buttons */}
+          {/* Action buttons - moved up closer to repo input */}
           <ActionButtons
             isLoading={isLoading}
             isProcessingTutorial={isProcessingTutorial}
@@ -575,6 +696,18 @@ export default function Home() {
             hasFiles={fileCount > 0}
             hasTutorial={!!tutorialResult}
             onViewTutorial={() => setShowTutorialViewer(true)}
+          />
+
+          {/* Filter section */}
+          <FilterSection
+            showFilters={showFilters}
+            setShowFilters={setShowFilters}
+            showExcludePatterns={showExcludePatterns}
+            setShowExcludePatterns={setShowExcludePatterns}
+            includePatterns={includePatterns}
+            setIncludePatterns={setIncludePatterns}
+            excludePatterns={excludePatterns}
+            setExcludePatterns={setExcludePatterns}
           />
         </form>
 
@@ -596,6 +729,7 @@ export default function Home() {
           isProcessing={isProcessingTutorial}
           providerId={llmConfig.providerId}
           modelId={llmConfig.modelId}
+          documentationMode={llmConfig.documentationMode || 'architecture'}
           onModelChange={(newProviderId, newModelId) => {
             setLLMConfig(prev => ({
               ...prev,
@@ -625,37 +759,64 @@ export default function Home() {
 
         {/* Loading indicators */}
         <LoadingIndicator type="repository" isLoading={isLoading} />
-        <LoadingIndicator type="tutorial" isLoading={isProcessingTutorial} progress={tutorialProgress} />
+        <LoadingIndicator 
+          type="tutorial" 
+          isLoading={isProcessingTutorial} 
+          progress={tutorialProgress}
+          documentationMode={llmConfig.documentationMode || 'architecture'}
+        />
 
         {/* Repository stats */}
         {stats && <StatsDisplay stats={stats} activeVersion={activeVersion} />}
 
-        {/* View Tutorial Button - shows when tutorial is available */}
+        {/* View Tutorial/Architecture Button - shows when documentation is available */}
         {tutorialResult && !showTutorialViewer && (
-          <div className="mb-6 p-4 bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-lg">
+          <div className={`mb-6 p-4 rounded-lg border ${
+            llmConfig.documentationMode === 'architecture'
+              ? 'bg-purple-50 dark:bg-purple-950/30 border-purple-200 dark:border-purple-800'
+              : 'bg-green-50 dark:bg-green-950/30 border-green-200 dark:border-green-800'
+          }`}>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <svg className="h-6 w-6 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg className={`h-6 w-6 ${
+                  llmConfig.documentationMode === 'architecture'
+                    ? 'text-purple-600 dark:text-purple-400'
+                    : 'text-green-600 dark:text-green-400'
+                }`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
                 <div>
-                  <p className="font-semibold text-green-800 dark:text-green-200">
-                    Tutorial Generated Successfully!
+                  <p className={`font-semibold ${
+                    llmConfig.documentationMode === 'architecture'
+                      ? 'text-purple-800 dark:text-purple-200'
+                      : 'text-green-800 dark:text-green-200'
+                  }`}>
+                    {llmConfig.documentationMode === 'architecture' 
+                      ? '🏗️ Architecture Documentation Generated!' 
+                      : '📚 Tutorial Generated Successfully!'}
                   </p>
-                  <p className="text-sm text-green-600 dark:text-green-400">
-                    {tutorialResult.chapters.length} chapters created
+                  <p className={`text-sm ${
+                    llmConfig.documentationMode === 'architecture'
+                      ? 'text-purple-600 dark:text-purple-400'
+                      : 'text-green-600 dark:text-green-400'
+                  }`}>
+                    {tutorialResult.chapters.length} {llmConfig.documentationMode === 'architecture' ? 'sections' : 'chapters'} created
                   </p>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setShowTutorialViewer(true)}
-                className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white font-medium rounded-lg transition-colors flex items-center gap-2"
+                className={`px-4 py-2 text-white font-medium rounded-lg transition-colors flex items-center gap-2 ${
+                  llmConfig.documentationMode === 'architecture'
+                    ? 'bg-purple-600 hover:bg-purple-700'
+                    : 'bg-green-600 hover:bg-green-700'
+                }`}
               >
                 <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
                 </svg>
-                View Tutorial
+                View {llmConfig.documentationMode === 'architecture' ? 'Architecture Docs' : 'Tutorial'}
               </button>
             </div>
           </div>

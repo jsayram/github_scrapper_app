@@ -13,6 +13,8 @@ interface FileSelectionModalProps {
   providerId?: string;
   /** LLM model ID for token estimation */
   modelId?: string;
+  /** Documentation mode - affects token estimation */
+  documentationMode?: 'tutorial' | 'architecture';
   /** Callback when user wants to change model */
   onModelChange?: (providerId: string, modelId: string) => void;
 }
@@ -60,6 +62,7 @@ export default function FileSelectionModal({
   isProcessing = false,
   providerId = 'openai',
   modelId = 'gpt-4o-mini',
+  documentationMode = 'architecture',
   onModelChange,
 }: FileSelectionModalProps) {
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set(Object.keys(files)));
@@ -233,8 +236,8 @@ export default function FileSelectionModal({
         <div className="p-4 border-b dark:border-gray-700">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-xl font-semibold flex items-center gap-2">
-              <span>📁</span>
-              Select Files for Tutorial Generation
+              <span>{documentationMode === 'architecture' ? '🏗️' : '📚'}</span>
+              Select Files for {documentationMode === 'architecture' ? 'Architecture Documentation' : 'Tutorial Generation'}
             </h2>
             <button
               onClick={onClose}
@@ -270,6 +273,7 @@ export default function FileSelectionModal({
               files={Array.from(selectedFiles).map(path => ({ path, content: files[path] || '' }))}
               providerId={providerId}
               modelId={modelId}
+              documentationMode={documentationMode}
               onModelSuggestionClick={onModelChange}
               className="mt-3"
             />
@@ -409,7 +413,7 @@ export default function FileSelectionModal({
                 </span>
               ) : (
                 <span>
-                  Ready to generate tutorial with {selectedFiles.size} files
+                  Ready to generate {documentationMode === 'architecture' ? 'architecture docs' : 'tutorial'} with {selectedFiles.size} files
                 </span>
               )}
             </p>
@@ -436,7 +440,7 @@ export default function FileSelectionModal({
                 ) : (
                   <>
                     <span>🚀</span>
-                    Generate Tutorial
+                    Generate {documentationMode === 'architecture' ? 'Architecture Docs' : 'Tutorial'}
                   </>
                 )}
               </button>
