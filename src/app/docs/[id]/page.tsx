@@ -29,10 +29,34 @@ interface DocData {
   format: 'md' | 'mdx';
 }
 
+/**
+ * Sanitize Mermaid diagram syntax to fix common LLM-generated issues
+ */
+function sanitizeMermaidChart(chart: string): string {
+  let sanitized = chart;
+  
+  // Fix <br/> followed by parentheses: <br/>(text) -> : text
+  sanitized = sanitized.replace(/<br\s*\/?>\s*\(([^)]+)\)/g, ': $1');
+  
+  // Fix parentheses inside square brackets: [Label (text)] -> [Label: text]
+  sanitized = sanitized.replace(/\[([^\]"]+?)\s+\(([^)]+)\)\]/g, '[$1: $2]');
+  
+  // Fix parentheses inside quoted brackets: ["Label (text)"] -> ["Label: text"]
+  sanitized = sanitized.replace(/\["([^"]+?)\s+\(([^)]+)\)"\]/g, '["$1: $2"]');
+  
+  // Remove any remaining <br/> tags that might cause issues
+  sanitized = sanitized.replace(/<br\s*\/?>/g, ' ');
+  
+  return sanitized;
+}
+
 // Completely static Mermaid - renders once into a div, no React state updates
 function StaticMermaidDiagram({ chart }: { chart: string }) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const rendered = React.useRef(false);
+  
+  // Sanitize the chart before rendering
+  const sanitizedChart = sanitizeMermaidChart(chart);
 
   React.useLayoutEffect(() => {
     if (rendered.current || !containerRef.current) return;
@@ -87,7 +111,7 @@ function StaticMermaidDiagram({ chart }: { chart: string }) {
           },
         });
 
-        const { svg } = await mermaid.render(id, chart.trim());
+        const { svg } = await mermaid.render(id, sanitizedChart.trim());
         
         // Direct DOM - no React involvement
         if (container) {
