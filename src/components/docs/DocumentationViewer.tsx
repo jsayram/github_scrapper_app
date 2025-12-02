@@ -155,6 +155,24 @@ export const DocumentationViewer: React.FC<DocumentationViewerProps> = ({
     }
   }, [chapters, selectedChapter, indexContent]);
 
+  // Handle escape key to close and prevent body scroll
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && onClose) {
+        onClose();
+      }
+    };
+    
+    // Prevent body scroll when modal is open
+    document.body.style.overflow = 'hidden';
+    document.addEventListener('keydown', handleKeyDown);
+    
+    return () => {
+      document.body.style.overflow = '';
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [onClose]);
+
   // Custom renderer for markdown
   const renderMarkdown = (content: string) => {
     // Process MDX-like components for MDX format
@@ -303,141 +321,161 @@ export const DocumentationViewer: React.FC<DocumentationViewerProps> = ({
   };
 
   return (
-    <div className={cn('w-full border rounded-lg bg-background flex flex-col', className)} style={{ height: '80vh' }}>
-      {/* Header */}
-      <header className="flex items-center justify-between px-4 py-3 border-b bg-muted/30 rounded-t-lg">
-        <div className="flex items-center gap-3">
-          <Book className="h-5 w-5 text-primary" />
-          <h1 className="text-lg font-semibold">{projectName} Tutorial</h1>
-          <span className="px-2 py-0.5 text-xs rounded-full bg-primary/10 text-primary uppercase font-medium">
-            {format}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleDownload}
-            disabled={isDownloading}
-            className="flex items-center gap-2 px-3 py-2 text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Download documentation as zip"
+    // Modal overlay - covers entire viewport
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
+      {/* Modal container - takes up 95% of viewport */}
+      <div 
+        className={cn(
+          'relative bg-background rounded-xl shadow-2xl border flex flex-col',
+          'w-[95vw] h-[92vh] max-w-[1800px]',
+          className
+        )}
+      >
+        {/* Header */}
+        <header className="flex items-center justify-between px-6 py-4 border-b bg-muted/30 rounded-t-xl flex-shrink-0">
+          <div className="flex items-center gap-3">
+            <Book className="h-6 w-6 text-primary" />
+            <h1 className="text-xl font-semibold">{projectName} Documentation</h1>
+            <span className="px-2.5 py-1 text-xs rounded-full bg-primary/10 text-primary uppercase font-medium">
+              {format}
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleDownload}
+              disabled={isDownloading}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Download documentation as zip"
+            >
+              {isDownloading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              <span>Download</span>
+            </button>
+            {onClose && (
+              <button
+                onClick={onClose}
+                className="p-2 hover:bg-muted rounded-lg transition-colors"
+                title="Close viewer (Esc)"
+              >
+                <X className="h-6 w-6" />
+              </button>
+            )}
+          </div>
+        </header>
+
+        <div className="flex flex-1 overflow-hidden">
+          {/* Left sidebar - Chapter list */}
+          <aside className={cn(
+            'border-r bg-muted/20 transition-all duration-300 flex flex-col flex-shrink-0',
+            sidebarCollapsed ? 'w-14' : 'w-64'
+          )}>
+            <div className="p-2 border-b">
+              <button
+                onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+                className="w-full p-2 hover:bg-muted rounded-lg transition-colors flex items-center justify-center"
+              >
+                {sidebarCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              </button>
+            </div>
+            
+            {!sidebarCollapsed && (
+              <nav className="flex-1 overflow-y-auto p-3 space-y-1">
+                {/* Index */}
+                {indexContent && (
+                  <button
+                    onClick={() => setSelectedChapter('index')}
+                    className={cn(
+                      'w-full text-left px-3 py-2.5 rounded-lg text-sm transition-colors flex items-center gap-2',
+                      selectedChapter === 'index'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'hover:bg-muted'
+                    )}
+                  >
+                    <Book className="h-4 w-4 flex-shrink-0" />
+                    <span className="truncate">Overview</span>
+                  </button>
+                )}
+                
+                {/* Chapters */}
+                {chapters.map((chapter, index) => (
+                  <button
+                    key={chapter.filename}
+                    onClick={() => setSelectedChapter(chapter.filename)}
+                    className={cn(
+                      'w-full text-left px-3 py-2.5 rounded-lg text-sm transition-colors flex items-center gap-2',
+                      selectedChapter === chapter.filename
+                        ? 'bg-primary text-primary-foreground'
+                        : 'hover:bg-muted'
+                    )}
+                  >
+                    <FileText className="h-4 w-4 flex-shrink-0" />
+                    <span className="truncate">{chapter.title || `Chapter ${index + 1}`}</span>
+                  </button>
+                ))}
+              </nav>
+            )}
+          </aside>
+
+          {/* Main content area - isolated scroll container */}
+          <main 
+            className="flex-1 min-w-0 overflow-hidden"
+            style={{ contain: 'strict' }}
           >
-            {isDownloading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Download className="h-4 w-4" />
-            )}
-            <span className="hidden sm:inline">Download</span>
-          </button>
-          {onClose && (
-            <button
-              onClick={onClose}
-              className="p-2 hover:bg-muted rounded-lg transition-colors"
-              title="Close viewer"
+            <div 
+              className="h-full overflow-y-auto doc-content-scroll"
+              style={{ 
+                overscrollBehavior: 'contain',
+              }}
             >
-              <X className="h-5 w-5" />
-            </button>
-          )}
+              <article className="doc-content max-w-4xl mx-auto px-8 py-8">
+                {currentChapter ? (
+                  renderMarkdown(currentChapter.content)
+                ) : (
+                  <div className="flex items-center justify-center h-64 text-muted-foreground">
+                    Select a chapter to view
+                  </div>
+                )}
+              </article>
+            </div>
+          </main>
+
+          {/* Right sidebar - Table of Contents */}
+          <aside className="hidden xl:block w-64 border-l bg-muted/20 overflow-y-auto flex-shrink-0">
+            <div className="p-4">
+              <h3 className="text-sm font-semibold mb-4 text-muted-foreground uppercase tracking-wide">
+                On This Page
+              </h3>
+              <nav className="space-y-1">
+                {tocItems.map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => scrollToHeading(item.id)}
+                    className={cn(
+                      'block w-full text-left text-sm py-1.5 transition-colors hover:text-foreground',
+                      item.level === 1 && 'font-semibold',
+                      item.level === 2 && 'pl-2',
+                      item.level === 3 && 'pl-4',
+                      item.level >= 4 && 'pl-6',
+                      activeHeading === item.id
+                        ? 'text-primary font-medium'
+                        : 'text-muted-foreground'
+                    )}
+                  >
+                    {item.title}
+                  </button>
+                ))}
+                {tocItems.length === 0 && (
+                  <p className="text-sm text-muted-foreground italic">
+                    No headings found
+                  </p>
+                )}
+              </nav>
+            </div>
+          </aside>
         </div>
-      </header>
-
-      <div className="flex flex-1 overflow-hidden">
-        {/* Left sidebar - Chapter list */}
-        <aside className={cn(
-          'border-r bg-muted/20 transition-all duration-300 flex flex-col flex-shrink-0',
-          sidebarCollapsed ? 'w-12' : 'w-56'
-        )}>
-          <div className="p-2 border-b">
-            <button
-              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-              className="w-full p-2 hover:bg-muted rounded-lg transition-colors flex items-center justify-center"
-            >
-              {sidebarCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-            </button>
-          </div>
-          
-          {!sidebarCollapsed && (
-            <nav className="flex-1 overflow-y-auto p-2 space-y-1">
-              {/* Index */}
-              {indexContent && (
-                <button
-                  onClick={() => setSelectedChapter('index')}
-                  className={cn(
-                    'w-full text-left px-3 py-2 rounded-lg text-sm transition-colors flex items-center gap-2',
-                    selectedChapter === 'index'
-                      ? 'bg-primary text-primary-foreground'
-                      : 'hover:bg-muted'
-                  )}
-                >
-                  <Book className="h-4 w-4 flex-shrink-0" />
-                  <span className="truncate">Overview</span>
-                </button>
-              )}
-              
-              {/* Chapters */}
-              {chapters.map((chapter, index) => (
-                <button
-                  key={chapter.filename}
-                  onClick={() => setSelectedChapter(chapter.filename)}
-                  className={cn(
-                    'w-full text-left px-3 py-2 rounded-lg text-sm transition-colors flex items-center gap-2',
-                    selectedChapter === chapter.filename
-                      ? 'bg-primary text-primary-foreground'
-                      : 'hover:bg-muted'
-                  )}
-                >
-                  <FileText className="h-4 w-4 flex-shrink-0" />
-                  <span className="truncate">{chapter.title || `Chapter ${index + 1}`}</span>
-                </button>
-              ))}
-            </nav>
-          )}
-        </aside>
-
-        {/* Main content area */}
-        <main className="flex-1 overflow-y-auto doc-content-scroll min-w-0">
-          <article className="doc-content max-w-3xl mx-auto px-6 py-6">
-            {currentChapter ? (
-              renderMarkdown(currentChapter.content)
-            ) : (
-              <div className="flex items-center justify-center h-64 text-muted-foreground">
-                Select a chapter to view
-              </div>
-            )}
-          </article>
-        </main>
-
-        {/* Right sidebar - Table of Contents */}
-        <aside className="hidden xl:block w-56 border-l bg-muted/20 overflow-y-auto flex-shrink-0">
-          <div className="p-4">
-            <h3 className="text-sm font-semibold mb-4 text-muted-foreground uppercase tracking-wide">
-              On This Page
-            </h3>
-            <nav className="space-y-1">
-              {tocItems.map((item) => (
-                <button
-                  key={item.id}
-                  onClick={() => scrollToHeading(item.id)}
-                  className={cn(
-                    'block w-full text-left text-sm py-1.5 transition-colors hover:text-foreground',
-                    item.level === 1 && 'font-semibold',
-                    item.level === 2 && 'pl-2',
-                    item.level === 3 && 'pl-4',
-                    item.level >= 4 && 'pl-6',
-                    activeHeading === item.id
-                      ? 'text-primary font-medium'
-                      : 'text-muted-foreground'
-                  )}
-                >
-                  {item.title}
-                </button>
-              ))}
-              {tocItems.length === 0 && (
-                <p className="text-sm text-muted-foreground italic">
-                  No headings found
-                </p>
-              )}
-            </nav>
-          </div>
-        </aside>
       </div>
     </div>
   );

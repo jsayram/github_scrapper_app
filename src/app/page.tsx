@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, FormEvent, useEffect } from "react";
+import { useState, FormEvent, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { getAllExcludedPatterns } from "@/lib/excludedPatterns";
 import {
   githubFileCrawler,
@@ -30,9 +31,9 @@ import {
   OPENAI_MODELS,
 } from "@/lib/constants/llm";
 import Footer from "@/components/Footer";
-import { DocumentationViewer } from "@/components/docs";
 
 export default function Home() {
+  const router = useRouter();
   // State management
   const [repoUrl, setRepoUrl] = useState("");
   const [githubToken, setGithubToken] = useState("");
@@ -55,7 +56,6 @@ export default function Home() {
     indexContent: string;
     projectName: string;
   } | null>(null);
-  const [showTutorialViewer, setShowTutorialViewer] = useState(false);
   const [error, setError] = useState("");
   const [selectedFile, setSelectedFile] = useState("");
   const [fileContent, setFileContent] = useState("");
@@ -96,6 +96,29 @@ export default function Home() {
   // Use the custom hook for notifications
   const { notifications, showNotification, dismissNotification } =
     useNotifications();
+
+  // Navigate to docs viewer page
+  const openDocsViewer = useCallback((
+    chapters: { filename: string; title: string; content: string }[],
+    indexContent: string,
+    projectName: string,
+    format: 'md' | 'mdx' = 'md'
+  ) => {
+    // Generate a unique ID for this doc session
+    const docId = `doc-${Date.now().toString(36)}`;
+    
+    // Store doc data in localStorage
+    localStorage.setItem(`doc-${docId}`, JSON.stringify({
+      chapters,
+      indexContent,
+      projectName,
+      format,
+    }));
+    
+    // Navigate to the docs viewer page
+    router.push(`/docs/${docId}`);
+  }, [router]);
+
 
   // Auto-save documentation to versions when generation completes
   const autoSaveDocumentation = (
@@ -406,6 +429,16 @@ export default function Home() {
       // Only send include patterns if there are some selected
       const patternsToInclude = includePatterns.length > 0 ? includePatterns : [];
 
+      // Get generation settings (use defaults if not set)
+      const genSettings = llmConfig.generationSettings || {
+        maxChapters: 5,
+        maxLinesPerFile: 150,
+        maxFileSize: 500000,
+        temperature: 0.2,
+        useCache: true,
+        language: 'english',
+      };
+
       // Prepare payload for API request
       const payload = {
         files: filesArray,
@@ -413,10 +446,13 @@ export default function Home() {
         include_patterns: patternsToInclude.length > 0 ? patternsToInclude : ["*"],
         exclude_patterns: excludePatterns.length > 0 ? excludePatterns : [],
         project_name: repoUrl.split("/").pop()?.replace(/\.git$/, "") || "GitHub-Tutorial",
-        language: "english",
-        use_cache: true,
-        max_abstraction_num: 5,
-        max_file_size: 500000,
+        // User-configurable settings (from GenerationSettings)
+        language: genSettings.language,
+        use_cache: genSettings.useCache,
+        max_abstraction_num: genSettings.maxChapters,
+        max_file_size: genSettings.maxFileSize,
+        max_lines_per_file: genSettings.maxLinesPerFile,
+        temperature: genSettings.temperature,
         // New multi-provider LLM configuration
         llm_provider: llmConfig.providerId,
         llm_model: llmConfig.modelId,
@@ -506,8 +542,6 @@ export default function Home() {
                     indexContent,
                     projectName,
                   });
-                  // Show the viewer automatically
-                  setShowTutorialViewer(true);
                   
                   // Auto-save the documentation to versions
                   autoSaveDocumentation(
@@ -516,6 +550,9 @@ export default function Home() {
                     projectName,
                     llmConfig.documentationMode
                   );
+                  
+                  // Auto-open the docs viewer page
+                  openDocsViewer(chapters, indexContent, projectName);
                 }
               }
               
@@ -619,18 +656,20 @@ export default function Home() {
         .replace(/-\d{4}-\d{2}-\d{2}$/, '')
         || 'Documentation';
       
-      // Set tutorial result and show viewer
+      // Set tutorial result
       setTutorialResult({
         chapters,
         indexContent,
         projectName,
       });
-      setShowTutorialViewer(true);
+      
+      // Navigate to docs viewer page
+      openDocsViewer(chapters, indexContent, projectName);
       
       showNotification(
         "success",
         "Documentation loaded",
-        `Showing ${chapters.length} chapters from "${versionInfo.name}"`
+        `Opening ${chapters.length} chapters from "${versionInfo.name}"`
       );
     }
   };
@@ -695,7 +734,15 @@ export default function Home() {
             onLoadVersion={handleLoadVersion}
             hasFiles={fileCount > 0}
             hasTutorial={!!tutorialResult}
-            onViewTutorial={() => setShowTutorialViewer(true)}
+            onViewTutorial={() => {
+              if (tutorialResult) {
+                openDocsViewer(
+                  tutorialResult.chapters,
+                  tutorialResult.indexContent,
+                  tutorialResult.projectName
+                );
+              }
+            }}
           />
 
           {/* Filter section */}
@@ -770,7 +817,7 @@ export default function Home() {
         {stats && <StatsDisplay stats={stats} activeVersion={activeVersion} />}
 
         {/* View Tutorial/Architecture Button - shows when documentation is available */}
-        {tutorialResult && !showTutorialViewer && (
+        {tutorialResult && (
           <div className={`mb-6 p-4 rounded-lg border ${
             llmConfig.documentationMode === 'architecture'
               ? 'bg-purple-50 dark:bg-purple-950/30 border-purple-200 dark:border-purple-800'
@@ -806,7 +853,15 @@ export default function Home() {
               </div>
               <button
                 type="button"
-                onClick={() => setShowTutorialViewer(true)}
+                onClick={() => {
+                  if (tutorialResult) {
+                    openDocsViewer(
+                      tutorialResult.chapters,
+                      tutorialResult.indexContent,
+                      tutorialResult.projectName
+                    );
+                  }
+                }}
                 className={`px-4 py-2 text-white font-medium rounded-lg transition-colors flex items-center gap-2 ${
                   llmConfig.documentationMode === 'architecture'
                     ? 'bg-purple-600 hover:bg-purple-700'
@@ -858,19 +913,6 @@ export default function Home() {
                 onClose={() => setShowSummary(false)}
               />
             </div>
-          </div>
-        )}
-
-        {/* Documentation Viewer - Inline within main content */}
-        {showTutorialViewer && tutorialResult && (
-          <div className="mt-6">
-            <DocumentationViewer
-              chapters={tutorialResult.chapters}
-              projectName={tutorialResult.projectName}
-              indexContent={tutorialResult.indexContent}
-              format="md"
-              onClose={() => setShowTutorialViewer(false)}
-            />
           </div>
         )}
       </main>

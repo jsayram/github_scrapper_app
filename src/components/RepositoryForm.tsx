@@ -4,6 +4,7 @@ import React, { useState, useCallback } from 'react';
 import LLMProviderSelector from './LLMProviderSelector';
 import CostEstimator from './CostEstimator';
 import CacheStatusPreview from './CacheStatusPreview';
+import GenerationSettings, { GenerationSettingsConfig, GENERATION_DEFAULTS } from './GenerationSettings';
 import { PROVIDER_IDS, OPENAI_MODELS } from '@/lib/constants/llm';
 
 export interface LLMConfig {
@@ -13,7 +14,13 @@ export interface LLMConfig {
   baseUrl?: string;
   regenerationMode?: 'full' | 'partial' | 'skip';
   documentationMode?: 'tutorial' | 'architecture';
+  // Generation settings (now user-configurable)
+  generationSettings?: GenerationSettingsConfig;
 }
+
+// Re-export for convenience
+export { GENERATION_DEFAULTS };
+export type { GenerationSettingsConfig };
 
 interface RepositoryFormProps {
   repoUrl: string;
@@ -100,6 +107,19 @@ const RepositoryForm: React.FC<RepositoryFormProps> = ({
       setInternalLLMConfig(newConfig);
     }
   }, [currentConfig, onLLMConfigChange]);
+
+  const handleGenerationSettingsChange = useCallback((settings: GenerationSettingsConfig) => {
+    const newConfig: LLMConfig = { ...currentConfig, generationSettings: settings };
+    
+    if (onLLMConfigChange) {
+      onLLMConfigChange(newConfig);
+    } else {
+      setInternalLLMConfig(newConfig);
+    }
+  }, [currentConfig, onLLMConfigChange]);
+
+  // Get current generation settings (with defaults)
+  const currentGenerationSettings: GenerationSettingsConfig = currentConfig.generationSettings || { ...GENERATION_DEFAULTS };
 
   return (
     <div className="space-y-4 mb-4">
@@ -220,6 +240,12 @@ const RepositoryForm: React.FC<RepositoryFormProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Generation Settings - Advanced Configuration */}
+      <GenerationSettings
+        settings={currentGenerationSettings}
+        onSettingsChange={handleGenerationSettingsChange}
+      />
 
       {/* Cache Status Preview - show when repo URL is provided */}
       {repoUrl && (

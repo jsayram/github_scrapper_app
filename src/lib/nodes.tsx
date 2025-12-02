@@ -50,6 +50,7 @@ interface SharedData {
   exclude_patterns?: string[];
   max_file_size?: number;
   max_lines_per_file?: number; // Maximum lines per file for truncation (default: 150)
+  temperature?: number; // LLM temperature (default: 0.2)
   files?: [string, string][]; // Array of [path, content] tuples
   language?: string;
   use_cache?: boolean;
@@ -1755,13 +1756,14 @@ ${
     : ""
 }
 - Begin with a high-level motivation explaining what problem this abstraction solves${instructionLangNote}. Start with a central use case as a concrete example. The whole chapter should guide the reader to understand how to solve this use case. Make it very minimal and friendly to beginners.
+- IMPORTANT: Include a **Component Overview** section early with a flowchart showing how this component fits into the larger system. Use \`\`\`mermaid flowchart TD\`\`\` format${mermaidLangNote}.
 - If the abstraction is complex, break it down into key concepts. Explain each concept one-by-one in a very beginner-friendly way${instructionLangNote}.
 - Explain how to use this abstraction to solve the use case${instructionLangNote}. Give example inputs and outputs for code snippets (if the output isn't values, describe at a high level what will happen${instructionLangNote}).
 - Each code block should be BELOW 10 lines! If longer code blocks are needed, break them down into smaller pieces and walk through them one-by-one. Aggresively simplify the code to make it minimal. Use comments${codeCommentNote} to skip non-important implementation details. Each code block should have a beginner friendly explanation right after it${instructionLangNote}.
 - Describe the internal implementation to help understand what's under the hood${instructionLangNote}. First provide a non-code or code-light walkthrough on what happens step-by-step when the abstraction is called${instructionLangNote}. It's recommended to use a simple sequenceDiagram with a dummy example - keep it minimal with at most 5 participants to ensure clarity. If participant name has space, use: \`participant QP as Query Processing\`. ${mermaidLangNote}.
+- Use mermaid diagrams to illustrate complex concepts (\`\`\`mermaid\`\`\` format). ${mermaidLangNote}.
 - Then dive deeper into code for the internal implementation with references to files. Provide example code blocks, but make them similarly simple and beginner-friendly. Explain${instructionLangNote}.
 - IMPORTANT: When you need to refer to other core abstractions covered in other chapters, ALWAYS use proper Markdown links like this: [Chapter Title](filename.md). Use the Complete Tutorial Structure above to find the correct filename and the chapter title${linkLangNote}. Translate the surrounding text.
-- Use mermaid diagrams to illustrate complex concepts (\`\`\`mermaid\`\`\` format). ${mermaidLangNote}.
 - Heavily use analogies and examples throughout${instructionLangNote} to help beginners understand.
 ${
   nextChapter
@@ -1893,102 +1895,39 @@ export class CombineTutorial extends Node<SharedData> {
     const isArchitectureMode = documentationMode === 'architecture';
 
     // --- Generate Mermaid Diagram ---
-    let mermaidDiagram: string;
-    
-    if (isArchitectureMode) {
-      // Architecture mode: Generate a more comprehensive system diagram
-      const mermaidLines: string[] = ["flowchart TB"];
-      const nodeMap: Record<number, string> = {};
-      
-      // Add subgraph groupings based on file paths
-      const subsystems = new Map<string, number[]>();
-      abstractions.forEach((abs, index) => {
-        // Group by common path prefix
-        const files = abs.files || [];
-        let category = 'Core';
-        if (files.length > 0) {
-          const firstFile = shared.files?.[files[0]]?.[0] || '';
-          if (firstFile.includes('/app/')) category = 'UI Layer';
-          else if (firstFile.includes('/api/')) category = 'API Layer';
-          else if (firstFile.includes('/lib/')) category = 'Core Logic';
-          else if (firstFile.includes('/components/')) category = 'Components';
-        }
-        if (!subsystems.has(category)) subsystems.set(category, []);
-        subsystems.get(category)!.push(index);
-      });
-      
-      // Add nodes with styling
-      abstractions.forEach((abs, index) => {
-        const nodeId = `A${index}`;
-        nodeMap[index] = nodeId;
-        const sanitizedName = abs.name.replace(/"/g, "").replace(/\n/g, " ");
-        mermaidLines.push(`    ${nodeId}["🔹 ${sanitizedName}"]`);
-      });
-      
-      // Add edges with relationship types
-      relationshipsData.details.forEach((rel) => {
-        const fromNodeId = nodeMap[rel.from];
-        const toNodeId = nodeMap[rel.to];
-        if (!fromNodeId || !toNodeId) return;
-        
-        let edgeLabel = rel.label.replace(/"/g, "").replace(/\n/g, " ");
-        const maxLabelLen = 25;
-        if (edgeLabel.length > maxLabelLen) {
-          edgeLabel = edgeLabel.substring(0, maxLabelLen - 3) + "...";
-        }
-        
-        // Use different arrow styles based on relationship type
-        const edgeStyle = edgeLabel.toLowerCase().includes('uses') ? '-->' 
-          : edgeLabel.toLowerCase().includes('extends') ? '-.->|extends|'
-          : edgeLabel.toLowerCase().includes('implements') ? '-.->|impl|'
-          : `-->|${edgeLabel}|`;
-          
-        if (edgeStyle.includes('|')) {
-          mermaidLines.push(`    ${fromNodeId} ${edgeStyle} ${toNodeId}`);
-        } else {
-          mermaidLines.push(`    ${fromNodeId} -- "${edgeLabel}" --> ${toNodeId}`);
-        }
-      });
-      
-      // Add styling
-      mermaidLines.push('');
-      mermaidLines.push('    %% Styling');
-      mermaidLines.push('    classDef default fill:#f9f9f9,stroke:#333,stroke-width:1px');
-      
-      mermaidDiagram = mermaidLines.join("\n");
-    } else {
-      // Tutorial mode: Simple flowchart
-      const mermaidLines: string[] = ["flowchart TD"];
-      const nodeMap: Record<number, string> = {};
+    const mermaidLines: string[] = ["flowchart TD"];
+    const nodeMap: Record<number, string> = {}; // Map abstraction index to Mermaid node ID
 
-      // Add nodes
-      abstractions.forEach((abs, index) => {
-        const nodeId = `A${index}`;
-        nodeMap[index] = nodeId;
-        const sanitizedName = abs.name.replace(/"/g, "");
-        mermaidLines.push(`    ${nodeId}["${sanitizedName}"]`);
-      });
+    // Add nodes
+    abstractions.forEach((abs, index) => {
+      const nodeId = `A${index}`;
+      nodeMap[index] = nodeId;
+      // Sanitize potentially translated name for Mermaid ID and label
+      const sanitizedName = abs.name.replace(/"/g, ""); // Basic quote removal
+      const nodeLabel = sanitizedName; // Keep label potentially translated
+      mermaidLines.push(`    ${nodeId}["${nodeLabel}"]`); // Node label uses potentially translated name
+    });
 
-      // Add edges
-      relationshipsData.details.forEach((rel) => {
-        const fromNodeId = nodeMap[rel.from];
-        const toNodeId = nodeMap[rel.to];
-        if (!fromNodeId || !toNodeId) {
-          console.warn(
-            `Skipping Mermaid edge due to missing node for relationship: ${rel.from} -> ${rel.to}`
-          );
-          return;
-        }
-        let edgeLabel = rel.label.replace(/"/g, "").replace(/\n/g, " ");
-        const maxLabelLen = 30;
-        if (edgeLabel.length > maxLabelLen) {
-          edgeLabel = edgeLabel.substring(0, maxLabelLen - 3) + "...";
-        }
-        mermaidLines.push(`    ${fromNodeId} -- "${edgeLabel}" --> ${toNodeId}`);
-      });
+    // Add edges
+    relationshipsData.details.forEach((rel) => {
+      const fromNodeId = nodeMap[rel.from];
+      const toNodeId = nodeMap[rel.to];
+      if (!fromNodeId || !toNodeId) {
+        console.warn(
+          `Skipping Mermaid edge due to missing node for relationship: ${rel.from} -> ${rel.to}`
+        );
+        return;
+      }
+      // Sanitize potentially translated label
+      let edgeLabel = rel.label.replace(/"/g, "").replace(/\n/g, " "); // Remove quotes, newlines
+      const maxLabelLen = 30;
+      if (edgeLabel.length > maxLabelLen) {
+        edgeLabel = edgeLabel.substring(0, maxLabelLen - 3) + "...";
+      }
+      mermaidLines.push(`    ${fromNodeId} -- "${edgeLabel}" --> ${toNodeId}`); // Edge label uses potentially translated label
+    });
 
-      mermaidDiagram = mermaidLines.join("\n");
-    }
+    const mermaidDiagram = mermaidLines.join("\n");
     // --- End Mermaid ---
 
     // --- Prepare index content ---
@@ -2009,26 +1948,41 @@ export class CombineTutorial extends Node<SharedData> {
       indexContent += `${relationshipsData.summary}\n\n`;
       
       indexContent += `## 🏗️ System Architecture\n\n`;
-      indexContent += `The following diagram shows the major subsystems and their relationships:\n\n`;
+      indexContent += `The following diagram shows the major components and their interactions:\n\n`;
       indexContent += "```mermaid\n";
       indexContent += mermaidDiagram + "\n";
+      indexContent += "```\n\n";
+      
+      indexContent += `## 📐 Component Structure\n\n`;
+      indexContent += `This class diagram illustrates the structure and relationships between major components:\n\n`;
+      indexContent += "```mermaid\n";
+      indexContent += classDiagram + "\n";
       indexContent += "```\n\n";
       
       indexContent += `## 📚 Subsystem Details\n\n`;
       indexContent += `Click on each subsystem below for detailed documentation:\n\n`;
     } else {
-      // Tutorial mode: Standard tutorial index
+      // Tutorial mode: Standard tutorial index with visual diagrams
       indexContent = `# Tutorial: ${projectName}\n\n`;
       indexContent += `${relationshipsData.summary}\n\n`;
 
       if (repoUrl) {
         indexContent += `**Source Repository:** [${repoUrl}](${repoUrl})\n\n`;
       }
-
+      
+      indexContent += `## 🗺️ Project Overview\n\n`;
+      indexContent += `This diagram shows how the main concepts in this project relate to each other:\n\n`;
       indexContent += "```mermaid\n";
       indexContent += mermaidDiagram + "\n";
       indexContent += "```\n\n";
-      indexContent += `## Chapters\n\n`;
+      
+      indexContent += `## 📐 Component Structure\n\n`;
+      indexContent += `The following class diagram shows the structure of the main components:\n\n`;
+      indexContent += "```mermaid\n";
+      indexContent += classDiagram + "\n";
+      indexContent += "```\n\n";
+      
+      indexContent += `## 📚 Chapters\n\n`;
     }
 
     const chapterFilesData: { filename: string; title: string; content: string }[] = [];
